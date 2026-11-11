@@ -17,6 +17,34 @@ Store reusable font files and generated font sources in `fonts/`.
 - Check Flash and internal-RAM impact before adding a font; the ESP32-C3 has no PSRAM.
 - Do not commit fonts whose license does not permit redistribution.
 
+### Device font subset (Player Pass)
+
+The personal-card firmware compiles a fixed subset for its 240 × 320 Chinese UI.
+
+| Item | Value |
+| --- | --- |
+| Family | Fusion Pixel 12px proportional, Simplified Chinese glyph set |
+| Release | 2026.10.25 |
+| Source | https://github.com/TakWolf/fusion-pixel-font/releases/tag/2026.10.25 |
+| Source file | `fusion-pixel-12px-proportional-zh_hans.ttf` (not committed) |
+| SHA-256 | `58a0ac8784bfb0ed70b788a9cf815d00fcad9daa9e0517b8d1c244b4f912e3d6` |
+| License | SIL Open Font License 1.1 |
+| Converter | `lv_font_conv` 1.5.3 (pinned) |
+| Inventory | 7,393 code points: printable ASCII, GB2312 symbols, level-1 and level-2 characters present in the source font, plus every non-ASCII character in `main/` |
+| Sizes | 12 px and 24 px, 1 bpp, uncompressed, line heights 16 and 28 px |
+| Generated | `pp_font_12.c`, `pp_font_24.c`, `pp_font_charset.c`, `pp_font_charset.txt` |
+| Verify | `tools/check_fonts.py`, run by `tools/validate.sh --static` |
+
+Regenerate with:
+
+```bash
+python3 tools/gen_fonts.py \
+  --font /path/to/fusion-pixel-12px-proportional-zh_hans.ttf \
+  --tool /path/to/node_modules/.bin/lv_font_conv
+```
+
+The source TTF is not committed. Generation requires `fonttools`; verification does not. The generator excludes the unused fullwidth currency block U+FFE0..U+FFE5. Dense CJK runs use LVGL 9.5's FORMAT0_FULL cmap, which the pinned LVGL version supports and whose built-in CJK fonts use as well; `tools/check_fonts.py` parses FULL alongside TINY/SPARSE_TINY. Generated line heights are patched to 16/28 px for the device layout. Measured Flash cost: 187,267 bytes (12 px font), 505,351 bytes (24 px font), and 28,700 bytes (coverage table), 721,318 bytes total.
+
 ## Images
 
 Store reusable source images and generated display assets in `images/`.

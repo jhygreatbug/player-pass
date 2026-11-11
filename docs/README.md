@@ -206,6 +206,7 @@ provide reference material. Choose the entry that matches your task.
 | Resource | What you will find |
 | --- | --- |
 | [Development](development/README.md) | AI workflow, engineering conventions, CI, and release guidance |
+| [Player Pass personal card](app/personal-passport/README.md) | Device UI, management AP, data/API, fonts, partitions, and acceptance for the personal card application |
 | [AI skills](../skills/README.md) | Development, environment setup, builds, device testing, and debugging |
 | [Hardware](hardware-design/README.md) | Board facts, interface boundaries, acceptance checklists, and troubleshooting |
 | [Chinese fonts](development/engineering/lvgl-chinese-fonts.md) | Glyph coverage, widget font selection, and blank-text troubleshooting |

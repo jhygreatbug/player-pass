@@ -1,16 +1,41 @@
 idf_component_register(
     SRCS "main.c"
-         "demo_navigation.c"
-         "ui_pixel.c"
-         "ui_pixel_math.c"
-         "demo_display.c"
-         "demo_button.c"
-         "demo_audio.c"
-         "demo_battery.c"
-         "demo_radio.c"
-         "demo_wifi.c"
-         "demo_ble.c"
-         "demo_low_power.c"
+         "app/app_core.c"
+         "app/text_utf8.c"
+         "data/profile.c"
+         "data/games.c"
+         "data/nfc.c"
+         "data/data_validate.c"
+         "storage/storage.c"
+         "storage/storage_budget.c"
+         "storage/storage_fs.c"
+         "image/image_meta.c"
+         "image/image_store.c"
+         "image/image_view.c"
+         "image/qr_render.c"
+         "session/mgmt_session.c"
+         "wifi_manager/wifi_manager.c"
+         "http_server/http_server.c"
+         "ui/ui_theme.c"
+         "ui/ui_app.c"
+         "ui/icons.c"
+         "font/pp_font.c"
+         "web/web_assets.c"
+         "third_party/cjson/cJSON.c"
+         "third_party/qrcodegen/qrcodegen.c"
+         "${CMAKE_CURRENT_LIST_DIR}/../assets/fonts/pp_font_12.c"
+         "${CMAKE_CURRENT_LIST_DIR}/../assets/fonts/pp_font_24.c"
+         "${CMAKE_CURRENT_LIST_DIR}/../assets/fonts/pp_font_charset.c"
     INCLUDE_DIRS "."
-    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
+                 "third_party/cjson"
+                 "third_party/qrcodegen"
+    REQUIRES bsp
+             esp_app_format
+             esp_event
+             esp_http_server
+             esp_netif
+             esp_timer
+             esp_wifi
+             littlefs
+             nvs_flash
 )

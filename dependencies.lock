@@ -20,7 +20,7 @@ dependencies:
       require: private
       version: '>=4.1'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.1.1
   espressif/esp_codec_dev:
@@ -51,6 +51,16 @@ dependencies:
     source:
       type: idf
     version: 5.5.3
+  joltwallet/littlefs:
+    component_hash: e1a0f4a6adf821759cb34703a91107bbdce5d7ff6f4728f40ab012bb87842974
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.23.1
   lvgl/lvgl:
     component_hash: 184e532558c1c45fefed631f3e235423d22582aafb4630f3e8885c35281a49ae
     dependencies: []
@@ -60,10 +70,12 @@ dependencies:
     version: 9.5.0
 direct_dependencies:
 - espressif/button
+- espressif/cmake_utilities
 - espressif/esp_codec_dev
 - espressif/esp_lvgl_port
 - idf
+- joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: db5703744958b4654342908988a87f1da9cac5e5612d3aceb0191f6bec59ba49
+manifest_hash: 08a9672e451db4ad92c8e77708cccdb987447a345232c1471897402a72619b22
 target: esp32c3
 version: 2.0.0

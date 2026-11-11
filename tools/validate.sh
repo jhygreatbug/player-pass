@@ -68,6 +68,43 @@ run_static_checks() {
         tests/test_bsp_audio_recovery.c components/bsp/src/bsp_es8311_sleep_check.c \
         -o "${test_dir}/test_bsp_audio_recovery"
     "${test_dir}/test_bsp_audio_recovery"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_text_utf8.c main/app/text_utf8.c \
+        -o "${test_dir}/test_text_utf8"
+    "${test_dir}/test_text_utf8"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_image_meta.c main/image/image_meta.c \
+        -o "${test_dir}/test_image_meta"
+    "${test_dir}/test_image_meta"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -Imain/third_party/cjson \
+        tests/test_image_store.c main/image/image_store.c main/data/games.c \
+        main/data/profile.c main/storage/storage.c main/data/data_validate.c \
+        main/app/text_utf8.c \
+        main/third_party/cjson/cJSON.c \
+        -o "${test_dir}/test_image_store"
+    "${test_dir}/test_image_store"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_storage_budget.c main/storage/storage_budget.c \
+        -o "${test_dir}/test_storage_budget"
+    "${test_dir}/test_storage_budget"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_storage.c main/storage/storage.c \
+        -o "${test_dir}/test_storage"
+    "${test_dir}/test_storage"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_mgmt_session.c main/session/mgmt_session.c \
+        main/app/text_utf8.c \
+        -o "${test_dir}/test_mgmt_session"
+    "${test_dir}/test_mgmt_session"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -Imain/third_party/cjson \
+        tests/test_models.c main/data/profile.c main/data/games.c \
+        main/data/nfc.c main/data/data_validate.c main/app/text_utf8.c \
+        main/third_party/cjson/cJSON.c \
+        -o "${test_dir}/test_models"
+    "${test_dir}/test_models"
+    PYTHONDONTWRITEBYTECODE=1 python3 tools/check_fonts.py
+    PYTHONDONTWRITEBYTECODE=1 python3 tools/pack_web.py --check
+    PYTHONDONTWRITEBYTECODE=1 python3 tools/gen_icons.py --check
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \

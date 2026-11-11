@@ -15,6 +15,34 @@
 - 添加字库前评估 Flash 与内部 RAM 影响；ESP32-C3 无 PSRAM。
 - 不提交许可不允许分发的字库。
 
+### 设备字体子集（Player Pass）
+
+个人名片固件为其 240 × 320 中文界面编译固定子集。
+
+| 项目 | 内容 |
+| --- | --- |
+| 字族 | Fusion Pixel 12px proportional，简体中文字形集 |
+| 发布版本 | 2026.10.25 |
+| 来源 | https://github.com/TakWolf/fusion-pixel-font/releases/tag/2026.10.25 |
+| 源文件 | `fusion-pixel-12px-proportional-zh_hans.ttf`（未提交） |
+| SHA-256 | `58a0ac8784bfb0ed70b788a9cf815d00fcad9daa9e0517b8d1c244b4f912e3d6` |
+| 许可 | SIL Open Font License 1.1 |
+| 转换工具 | `lv_font_conv` 1.5.3（固定版本） |
+| 字符清单 | 7,393 个码点：可打印 ASCII、GB2312 符号区与源字体实际包含的一级/二级汉字，以及 `main/` 中出现的全部非 ASCII 字符 |
+| 字号 | 12 px 与 24 px，1 bpp，不压缩，行高 16 / 28 px |
+| 生成文件 | `pp_font_12.c`、`pp_font_24.c`、`pp_font_charset.c`、`pp_font_charset.txt` |
+| 校验 | `tools/check_fonts.py`，由 `tools/validate.sh --static` 执行 |
+
+重新生成：
+
+```bash
+python3 tools/gen_fonts.py \
+  --font /path/to/fusion-pixel-12px-proportional-zh_hans.ttf \
+  --tool /path/to/node_modules/.bin/lv_font_conv
+```
+
+源 TTF 不提交。生成需要 `fonttools`，校验不需要。生成脚本排除了未使用的全角货币符号区 U+FFE0..U+FFE5。密集的 CJK 区段会使用 LVGL 9.5 支持的 FORMAT0_FULL cmap（LVGL 自带 CJK 字体也使用该布局）；`tools/check_fonts.py` 同时解析 FULL 与 TINY/SPARSE_TINY。生成后的行高会改写为适配布局的 16 / 28 px。实测 Flash 占用：12 px 字体 187,267 字节、24 px 字体 505,351 字节、覆盖表 28,700 字节，合计 721,318 字节。
+
 ## 图片（images）
 
 可复用的源图与生成的显示资产放在 `images/`。

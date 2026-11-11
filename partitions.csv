@@ -1,4 +1,9 @@
-# Name,   Type, SubType, Offset,   Size,     Flags
-nvs,      data, nvs,     0x9000,   0x6000,
-phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  0x7f0000,
+# Name,   Type, SubType,  Offset,   Size,     Flags
+# Player Pass: one factory application plus a LittleFS data partition.
+# The measured application image is 0x205B90 bytes (2,120,592), leaving 33% of
+# the 3 MiB factory partition free for font regeneration. The 0x4F0000 LittleFS
+# partition holds JSON records and images; see docs/app/personal-passport/README.md.
+nvs,      data, nvs,      0x9000,   0x6000,
+phy_init, data, phy,      0xf000,   0x1000,
+factory,  app,  factory,  0x10000,  0x300000,
+storage,  data, littlefs, 0x310000, 0x4F0000,

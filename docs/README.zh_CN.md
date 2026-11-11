@@ -200,6 +200,7 @@ LICENSE                  仓库许可证
 | 入口 | 你可以找到 |
 | --- | --- |
 | [开发指南](development/README.zh_CN.md) | AI 工作流、工程规范、CI 与发布流程 |
+| [Player Pass 个人像素名片](app/personal-passport/README.zh_CN.md) | 个人名片应用：设备 UI、管理热点、数据/API、字体、分区与验收 |
 | [AI 技能](../skills/README.zh_CN.md) | 开发、环境准备、构建、真机测试与故障诊断 |
 | [硬件资料](hardware-design/README.zh_CN.md) | 板卡事实、接口边界、验收清单与排障 |
 | [中文字体](development/engineering/lvgl-chinese-fonts.zh_CN.md) | 字形覆盖、控件字体选择，以及中文空白排查 |

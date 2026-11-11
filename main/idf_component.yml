@@ -1,0 +1,10 @@
+dependencies:
+  joltwallet/littlefs: "1.23.1"
+  # Keep the baseline's pinned graphics/build stack.  Adding a new manifest
+  # otherwise lets the resolver pick newer versions; the application was
+  # developed and this build is validated against LVGL 9.5.0.
+  lvgl/lvgl: "9.5.0"
+  espressif/cmake_utilities: "1.1.1"
+
+idf:
+  version: ">=5.5.0"

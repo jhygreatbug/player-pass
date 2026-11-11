@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Player Pass 管理台</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div>
+      <div class="brand-name">PLAYER PASS</div>
+      <div class="brand-sub">个人名片 · 本地管理台</div>
+    </div>
+  </div>
+  <div class="top-status">
+    <span class="dot" id="conn-dot"></span>
+    <span id="conn-text">连接中…</span>
+    <span class="chip" id="editor-chip">只读</span>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs" aria-label="管理页面">
+  <button class="tab active" data-tab="overview">概览</button>
+  <button class="tab" data-tab="profile">个人资料</button>
+  <button class="tab" data-tab="games">游戏</button>
+  <button class="tab" data-tab="contact">联系方式</button>
+  <button class="tab" data-tab="nfc">NFC</button>
+  <button class="tab" data-tab="backup">备份</button>
+</nav>
+
+<div class="banner hidden" id="session-banner">
+  <span id="session-banner-text">设备正被另一个浏览器编辑。</span>
+  <button class="btn small" id="retry-claim" data-readonly-ok>重试取得编辑权限</button>
+</div>
+<div class="banner error hidden" id="error-banner"><span id="error-banner-text"></span></div>
+
+<main>
+  <section class="tab-panel active" id="tab-overview">
+    <div class="grid two">
+      <article class="card">
+        <h2><span class="accent"></span>设备连接</h2>
+        <dl class="facts">
+          <dt>热点</dt><dd id="ov-ssid">—</dd>
+          <dt>管理地址</dt><dd id="ov-ip">—</dd>
+          <dt>已连接设备</dt><dd id="ov-clients">—</dd>
+          <dt>固件</dt><dd id="ov-firmware">—</dd>
+          <dt>运行时间</dt><dd id="ov-uptime">—</dd>
+          <dt>编辑状态</dt><dd id="ov-session">—</dd>
+        </dl>
+        <p class="muted small">在浏览器打开 <strong id="ov-url">http://192.168.4.1</strong> 即可管理。热点密码显示在设备的管理模式屏幕上。</p>
+      </article>
+
+      <article class="card">
+        <h2><span class="accent"></span>存储空间</h2>
+        <div class="storage-head"><span id="ov-storage-text">—</span><span id="ov-storage-percent">—</span></div>
+        <div class="storage-track"><div class="storage-fill" id="ov-storage-bar"></div></div>
+        <p class="muted small" id="ov-storage-hint">图片保存在设备本地。达到 80% 会提醒，90% 会警告。</p>
+        <p class="warn hidden" id="ov-storage-warning">存储空间接近上限，请删除不用的图片或游戏封面。</p>
+      </article>
+
+      <article class="card">
+        <h2><span class="accent"></span>管理模式</h2>
+        <p class="big-number" id="ov-lease">不自动退出</p>
+        <p class="muted small">热点与管理页面会保持开启，直到设备长按 OK 退出。关闭页面后，编辑权限为原浏览器保留 2 分钟。</p>
+      </article>
+
+      <article class="card">
+        <h2><span class="accent"></span>使用提示</h2>
+        <ul class="tips">
+          <li>图片仅支持 JPG / PNG。浏览器会完成裁剪、压缩并转换为 RGB565，设备端不做解码。</li>
+          <li>手机连接设备热点时，部分 Android 机型会暂时切走移动数据；如果管理页可用但外部链接打不开，请先断开热点再访问小黑盒。</li>
+          <li>NFC 为无源 NTAG213 标签，固件不能改写。请复制 NFC 内容，用支持 NFC 的手机写入标签。</li>
+          <li>支持手动 JSON 导出/导入（含图片）；不提供自动备份、ZIP、历史版本或 OTA。导入不会自动回滚。</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-profile">
+    <form class="card editable" id="profile-form" autocomplete="off">
+      <h2><span class="accent"></span>个人资料</h2>
+      <div class="grid two">
+        <label class="field">姓名或昵称
+          <input id="p-name" data-path="name" maxlength="24" placeholder="例如：阿陈">
+          <span class="counter" data-counter-for="p-name"></span>
+        </label>
+        <label class="field">Steam ID
+          <input id="p-steam" data-path="platforms.steam.id" maxlength="40" placeholder="Steam 好友代码或自定义 ID">
+        </label>
+        <label class="field span-two">一句话介绍
+          <textarea id="p-tagline" data-path="tagline" maxlength="60" rows="2" placeholder="每天玩一点游戏，也做一点像素小玩意"></textarea>
+          <span class="counter" data-counter-for="p-tagline"></span>
+        </label>
+        <label class="field">Nintendo Switch ID
+          <input id="p-switch" data-path="platforms.switch.id" maxlength="40" placeholder="SW-0000-0000-0000">
+        </label>
+        <label class="field">PlayStation ID
+          <input id="p-psn" data-path="platforms.playstation.id" maxlength="40" placeholder="PSN ID">
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit" class="btn primary" id="save-profile">保存个人资料</button>
+        <span class="dirty" id="profile-dirty"></span>
+      </div>
+    </form>
+
+    <div class="card">
+      <h2><span class="accent"></span>图片</h2>
+      <p class="muted small">每个条目只保留一张图片。上传采用临时文件、校验、原子替换；失败时旧图片保留。</p>
+      <div class="image-grid" id="profile-images">
+        <div class="image-card" data-slot="avatar" data-kind="avatar">
+          <div class="image-title">头像 <span class="muted small">正方形 88×88</span></div>
+          <div class="preview square"><canvas width="88" height="88"></canvas><span class="empty">未上传</span></div>
+          <input type="file" accept="image/jpeg,image/png" class="file-input">
+          <div class="image-actions">
+            <button type="button" class="btn small primary" data-action="upload">上传</button>
+            <button type="button" class="btn small ghost" data-action="remove">移除</button>
+          </div>
+          <div class="image-status muted small"></div>
+        </div>
+        <div class="image-card" data-slot="qr_steam" data-kind="qr">
+          <div class="image-title">Steam 二维码 <span class="muted small">保留比例 180×180</span></div>
+          <div class="preview square"><canvas width="180" height="180"></canvas><span class="empty">未上传</span></div>
+          <input type="file" accept="image/jpeg,image/png" class="file-input">
+          <div class="image-actions">
+            <button type="button" class="btn small primary" data-action="upload">上传</button>
+            <button type="button" class="btn small ghost" data-action="remove">移除</button>
+          </div>
+          <div class="image-status muted small"></div>
+        </div>
+        <div class="image-card" data-slot="qr_switch" data-kind="qr">
+          <div class="image-title">Switch 二维码 <span class="muted small">保留比例 180×180</span></div>
+          <div class="preview square"><canvas width="180" height="180"></canvas><span class="empty">未上传</span></div>
+          <input type="file" accept="image/jpeg,image/png" class="file-input">
+          <div class="image-actions">
+            <button type="button" class="btn small primary" data-action="upload">上传</button>
+            <button type="button" class="btn small ghost" data-action="remove">移除</button>
+          </div>
+          <div class="image-status muted small"></div>
+        </div>
+        <div class="image-card" data-slot="qr_psn" data-kind="qr">
+          <div class="image-title">PlayStation 二维码 <span class="muted small">保留比例 180×180</span></div>
+          <div class="preview square"><canvas width="180" height="180"></canvas><span class="empty">未上传</span></div>
+          <input type="file" accept="image/jpeg,image/png" class="file-input">
+          <div class="image-actions">
+            <button type="button" class="btn small primary" data-action="upload">上传</button>
+            <button type="button" class="btn small ghost" data-action="remove">移除</button>
+          </div>
+          <div class="image-status muted small"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-games">
+    <div class="card">
+      <div class="card-head">
+        <h2><span class="accent"></span>游戏收藏</h2>
+        <div class="head-actions">
+          <button class="btn small primary" id="add-game" data-mutation>新增游戏</button>
+          <button class="btn small" id="save-games" data-mutation>保存游戏列表</button>
+        </div>
+      </div>
+      <p class="muted small">列表按“喜欢的游戏 → 正在玩的游戏”连续展示。设备默认展示约 10 款；游戏数量受设备存储与内存限制。</p>
+      <div class="games-list" id="games-list"></div>
+      <p class="empty-state hidden" id="games-empty">还没有游戏。点击“新增游戏”开始。</p>
+      <div class="dirty" id="games-dirty"></div>
+    </div>
+
+    <div class="card editor hidden" id="game-editor">
+      <div class="card-head">
+        <h2><span class="accent"></span><span id="game-editor-title">新增游戏</span></h2>
+        <button class="btn small ghost" id="game-editor-close" type="button">关闭</button>
+      </div>
+      <div class="grid two">
+        <label class="field">游戏名称
+          <input id="g-title" maxlength="40" placeholder="例如：塞尔达传说">
+          <span class="counter" data-counter-for="g-title"></span>
+        </label>
+        <label class="field">分组
+          <select id="g-group">
+            <option value="favorite">喜欢的游戏</option>
+            <option value="playing">正在玩的游戏</option>
+          </select>
+        </label>
+        <label class="field span-two">简短介绍
+          <textarea id="g-note" maxlength="120" rows="3" placeholder="一两句话介绍这款游戏"></textarea>
+          <span class="counter" data-counter-for="g-note"></span>
+        </label>
+        <label class="field span-two">小黑盒链接
+          <input id="g-link" maxlength="480" placeholder="https://www.xiaoheihe.cn/...">
+        </label>
+      </div>
+      <div class="cover-editor">
+        <div class="preview cover"><canvas id="g-cover" width="72" height="96"></canvas><span class="empty">无封面</span></div>
+        <div>
+          <input type="file" id="g-cover-file" accept="image/jpeg,image/png" class="file-input">
+          <div class="image-actions">
+            <button type="button" class="btn small primary" id="g-cover-upload" data-mutation>上传封面</button>
+            <button type="button" class="btn small ghost" id="g-cover-remove" data-mutation>移除封面</button>
+          </div>
+          <p class="muted small">竖版 3:4 裁剪，设备显示 72×96。先保存游戏到列表即可上传封面。</p>
+          <div class="image-status muted small" id="g-cover-status"></div>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn primary" id="game-editor-save" data-mutation>保存到列表</button>
+        <button type="button" class="btn ghost" id="game-editor-cancel">取消</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-contact">
+    <form class="card editable" id="contact-form" autocomplete="off">
+      <h2><span class="accent"></span>联系方式</h2>
+      <div class="grid two">
+        <label class="field">微博账号
+          <input id="c-weibo-handle" data-path="contact.weibo.handle" maxlength="40" placeholder="@yourname">
+        </label>
+        <label class="field">微博链接（可选，用于生成二维码）
+          <input id="c-weibo-url" data-path="contact.weibo.url" maxlength="480" placeholder="https://weibo.com/u/...">
+        </label>
+        <label class="field">微信昵称
+          <input id="c-wechat-name" data-path="contact.wechat.name" maxlength="24" placeholder="小陈">
+        </label>
+        <label class="field">微信号
+          <input id="c-wechat-id" data-path="contact.wechat.id" maxlength="40" placeholder="wechat_id">
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit" class="btn primary" id="save-contact">保存联系方式</button>
+        <span class="dirty" id="contact-dirty"></span>
+      </div>
+    </form>
+
+    <div class="card">
+      <h2><span class="accent"></span>微信图片</h2>
+      <p class="muted small">二维码保留原始比例并放大到 180×180；收款码单独一张。每个条目只保留一张图片。</p>
+      <div class="image-grid" id="contact-images">
+        <div class="image-card" data-slot="qr_wechat" data-kind="qr">
+          <div class="image-title">微信二维码 <span class="muted small">180×180</span></div>
+          <div class="preview square"><canvas width="180" height="180"></canvas><span class="empty">未上传</span></div>
+          <input type="file" accept="image/jpeg,image/png" class="file-input">
+          <div class="image-actions">
+            <button type="button" class="btn small primary" data-action="upload">上传</button>
+            <button type="button" class="btn small ghost" data-action="remove">移除</button>
+          </div>
+          <div class="image-status muted small"></div>
+        </div>
+        <div class="image-card" data-slot="qr_wechat_pay" data-kind="qr">
+          <div class="image-title">微信收款码 <span class="muted small">180×180</span></div>
+          <div class="preview square"><canvas width="180" height="180"></canvas><span class="empty">未上传</span></div>
+          <input type="file" accept="image/jpeg,image/png" class="file-input">
+          <div class="image-actions">
+            <button type="button" class="btn small primary" data-action="upload">上传</button>
+            <button type="button" class="btn small ghost" data-action="remove">移除</button>
+          </div>
+          <div class="image-status muted small"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-nfc">
+    <form class="card editable" id="nfc-form" autocomplete="off">
+      <h2><span class="accent"></span>NFC 入口</h2>
+      <p class="muted small">卡片上的 NTAG213 是无源标签，固件无法直接改写。这里配置的是要写入标签的内容；设备会显示内容并生成二维码，方便手机写入或复制。</p>
+      <label class="switch field">
+        <input type="checkbox" id="n-enabled">
+        <span>启用 NFC 入口</span>
+      </label>
+      <div class="grid two">
+        <label class="field">入口名称
+          <input id="n-label" maxlength="16" placeholder="例如：小黑盒主页">
+          <span class="counter" data-counter-for="n-label"></span>
+        </label>
+        <label class="field">类型
+          <select id="n-type">
+            <option value="url">网址（生成二维码）</option>
+            <option value="text">文本</option>
+          </select>
+        </label>
+        <label class="field span-two">内容
+          <textarea id="n-content" maxlength="160" rows="4" placeholder="https://… 或一段文字"></textarea>
+          <span class="counter" data-counter-for="n-content"></span>
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit" class="btn primary" id="save-nfc">保存 NFC 配置</button>
+        <span class="dirty" id="nfc-dirty"></span>
+      </div>
+    </form>
+  </section>
+  <section class="tab-panel" id="tab-backup">
+    <div class="grid two">
+      <article class="card">
+        <h2><span class="accent"></span>导出备份</h2>
+        <p class="muted small">把个人资料、游戏列表、NFC 配置和全部图片打包成一个 JSON 备份文件。图片以 PPIM 原始数据 Base64 保存，不包含热点密码。</p>
+        <div class="actions">
+          <button type="button" class="btn primary" id="export-backup" data-readonly-ok>导出全部数据</button>
+        </div>
+        <div class="image-status muted small" id="export-status"></div>
+      </article>
+      <article class="card">
+        <h2><span class="accent"></span>导入备份</h2>
+        <p class="muted small">导入会覆盖设备上的个人资料、游戏、NFC 与相关图片。建议先导出当前数据；导入需要编辑权限。</p>
+        <input type="file" id="import-file" accept="application/json,.json" class="file-input">
+        <div class="actions">
+          <button type="button" class="btn danger" id="import-backup" data-mutation>导入并覆盖</button>
+        </div>
+        <div class="image-status muted small" id="import-status"></div>
+      </article>
+    </div>
+    <article class="card">
+      <h2><span class="accent"></span>说明</h2>
+      <ul class="tips">
+        <li>备份文件包含个人资料和图片，请妥善保管。</li>
+        <li>导入不提供自动回滚；失败时可能已写入部分数据，建议先导出当前状态。</li>
+        <li>手动备份之外，本产品仍不提供自动备份、ZIP、历史版本或 OTA。</li>
+      </ul>
+    </article>
+  </section>
+
+</main>
+
+<footer class="footer">Player Pass · 所有资料保存在设备本地 · 手动备份 · 无云端、无登录</footer>
+<div class="toast hidden" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+Third-party component: QR Code generator library (C)
+Source: https://github.com/nayuki/QR-Code-generator (master, fetched 2026-11-10)
+Files: qrcodegen.c, qrcodegen.h
+License: MIT (copyright Project Nayuki; full text is in qrcodegen.h)
+Version: upstream master; no local modifications.

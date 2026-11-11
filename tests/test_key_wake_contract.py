@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contracts for the deep-sleep key-wake guard wiring in main.c."""
+"""Static contracts for the startup key-hold guard wiring in the app input path."""
 
 from pathlib import Path
 import re
@@ -32,7 +32,7 @@ def function_body(source: str, name: str) -> str:
 class KeyWakeGuardWiringTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.main = read("main/main.c")
+        cls.main = read("main/app/app_core.c")
 
     def test_on_key_consumes_the_guard_before_the_readiness_check(self) -> None:
         # A release can arrive after the post-init voltage sample but before input
