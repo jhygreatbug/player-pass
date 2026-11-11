@@ -1,4 +1,4 @@
-// Shared field validation for stored profile, game, and NFC records.
+// Shared field validation for stored profile and game records.
 #pragma once
 
 #include <stdbool.h>

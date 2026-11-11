@@ -15,10 +15,9 @@ required.
   data/
     profile.json        profile text and generic contact list
     games.json          game list, normalized to favourites then playing
-    nfc.json            NFC label, type, and payload
   img/
     avatar.bin          88 x 88
-    games/<game-id>.bin 72 x 108
+    games/<game-id>.bin 216 x 101
 ```
 
 Image presence is derived from the filesystem. A JSON record never stores a
@@ -47,7 +46,7 @@ size the UI displays.
 | Slot kind | Dimensions | Complete file bytes |
 | --- | --- | ---: |
 | Avatar | 88 x 88 | 15,508 |
-| Game cover | 72 x 108 | 15,572 |
+| Game cover | 216 x 101 | 43,652 |
 
 The upload endpoint requires the exact byte length for the slot, validates the
 header and dimensions, streams to `<name>.tmp`, computes the CRC, and only then
@@ -94,6 +93,10 @@ Version 1 files stored fixed `contact.weibo` / `contact.wechat` objects. They ar
 converted on load into generic contacts, and the next save writes version 2.
 Uploaded QR images from older builds are no longer read or shown.
 
+`platforms.steam.id` is a display field. The optional recent/most-played lists
+in the console accept a numeric Steam friend code (1-10 digits) or a 17-digit
+SteamID64; the game-data service converts friend codes itself.
+
 ### games.json
 
 ```json
@@ -118,22 +121,6 @@ save: all favourites first, then playing, preserving relative order inside each
 group. The API accepts up to 200 entries as an input/resource guard; the product
 expectation is about ten.
 
-### nfc.json
-
-```json
-{
-  "version": 1,
-  "enabled": true,
-  "label": "Homepage",
-  "type": "url",
-  "content": "https://example.com/"
-}
-```
-
-`label` is 16 code points, `content` is 160 code points. `type` is `url` or
-`text`. When enabled, content is required; a URL type must be a valid HTTP(S)
-URL.
-
 ## HTTP API
 
 Base URL: `http://192.168.4.1`. All responses are `application/json` except
@@ -153,8 +140,6 @@ carry `Content-Length`; the server rejects chunked or missing lengths.
 | PUT | `/api/profile` | token | Validate, write, and return profile |
 | GET | `/api/games` | no | Games plus cover flags |
 | PUT | `/api/games` | token | Replace the list and prune orphan covers |
-| GET | `/api/nfc` | no | NFC record |
-| PUT | `/api/nfc` | token | Validate and write NFC record |
 | GET | `/api/images/<slot>` | no | Stream a PPIM file |
 | PUT | `/api/images/<slot>` | token | Stream-upload a PPIM file |
 | DELETE | `/api/images/<slot>` | token | Remove an image |
@@ -162,6 +147,18 @@ carry `Content-Length`; the server rejects chunked or missing lengths.
 
 Slots: `avatar` and `games/<game-id>`. Contact QR codes are generated on the
 device from the contact link and are not uploadable images.
+
+### Console save model
+
+The console loads each document once when the page opens and treats the
+browser's state as authoritative while it stays open. Reconnecting after a
+Wi-Fi drop re-claims the lease but never reloads documents that already loaded,
+so unsaved edits survive. One **Save changes** action validates the changed text
+first, then writes `profile.json` and `games.json` in that order,
+uploads pending images, and applies pending image deletions. Only sections with
+local changes are written. Each part is independent: a failed part keeps its
+local state and is retried by the next save. The API stays per-document; there
+is no combined write endpoint.
 
 ### Claim
 
@@ -266,15 +263,15 @@ Response:
 }
 ```
 
-The server also performs this check on every profile, game, and NFC write and
+The server also performs this check on every profile and game write and
 rejects the request with the first unsupported code point. The device sanitizer
 replaces unsupported characters with `?` and logs `U+XXXX`.
 
 ## Image upload pipeline
 
 1. Browser validates JPG/PNG (WebP and GIF are rejected), orients, and crops:
-   avatar square, cover 2:3 portrait.
-2. Browser draws at 88 x 88 or 72 x 108, converts to RGB565 little-endian
+   avatar square, cover 460:215 (Steam header art).
+2. Browser draws at 88 x 88 or 216 x 101, converts to RGB565 little-endian
    with ordered dithering, computes CRC32, and sends `application/octet-stream`
    with the exact length.
 3. Server verifies slot, token, type, length, free space, then reads the header
@@ -289,7 +286,7 @@ exists. This is checked before the transfer starts.
 ## Manual backup format
 
 The backup tab is implemented entirely in the browser; there is no server-side
-backup endpoint. It reads profile, games, and NFC through the normal GET
+backup endpoint. It reads profile and games through the normal GET
 endpoints, reads every referenced image through `GET /api/images/<slot>`, and
 downloads one JSON file:
 
@@ -306,7 +303,6 @@ downloads one JSON file:
     ]
   },
   "games": { "version": 1, "games": [] },
-  "nfc": { "version": 1, "enabled": false },
   "images": {
     "avatar": "<base64 PPIM bytes>",
     "games/g-a1b2c3": "<base64 PPIM bytes>"
@@ -317,14 +313,18 @@ downloads one JSON file:
 - The file is plain JSON, not a ZIP, and does not contain the AP password.
 - Export is read-only and can run without the editor lease.
 - Import requires the editor token. It validates the format and slot names,
-  writes profile, games, and NFC through their PUT endpoints, then uploads the
-  fixed profile images and game covers. Slots absent from the backup are
-  deleted, so the result matches the backup.
+  writes profile and games through their PUT endpoints, then uploads the fixed
+  profile images and game covers. Slots absent from the backup are deleted, so
+  the result matches the backup.
+- Backups exported by older builds may still carry an `nfc` object; it is
+  ignored on import.
 - The browser accepts files up to 16 MB. Import stops at the first error and
   has no automatic rollback; export the current state before importing.
 - Slot names are exactly those accepted by the image API. Legacy `qr_steam`,
   `qr_switch`, `qr_psn`, `qr_wechat`, and `qr_wechat_pay` slots in older
-  backups are accepted but ignored on import.
+  backups are accepted but ignored on import. Game covers in any other format
+  are also skipped, because the device only accepts 216 x 101 covers; the rest
+  of the backup still imports.
 
 ## Error responses
 
@@ -347,15 +347,20 @@ Errors use `{ "error": "slug", "message": "human-readable text" }`.
 The AP uses WPA2-PSK with a fixed product password compiled into the firmware.
 The console has no login by design; anyone who can join the AP can read data,
 and the lease prevents simultaneous editing. The AP is not bridged to the
-internet and the console makes no external requests. The device does not expose
-the AP password over HTTP; it is shown on the device screen. Rotate it by
+internet and the device itself never makes external requests. The console's
+optional game search and player playtime lists are browser-side HTTPS calls to
+the game-data service; they send only the search keyword or the Steam friend
+code entered in the profile, and never require an account. The device does not
+expose the AP password over HTTP; it is shown on the device screen. Rotate it by
 rebuilding the firmware. NVS holds Wi-Fi calibration only.
 
 ## Phone network behaviour
 
 The AP has no upstream internet connection. iOS usually keeps cellular data
 available while joined to an AP without internet; some Android versions route
-all traffic through the AP and block internet until the AP is disconnected. The
-console works entirely offline, but external links opened from the phone may
-require disconnecting the AP first. This behaviour is documented as unverified
-until tested on the user's phones.
+all traffic through the AP and block internet until the AP is disconnected.
+The console works entirely offline for editing; game search, Steam candidate
+lists, and automatic cover downloads additionally need internet access from the
+phone. External links opened from the phone may require disconnecting the AP
+first. This behaviour is documented as unverified until tested on the user's
+phones.

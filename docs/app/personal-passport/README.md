@@ -5,10 +5,10 @@
 # Player Pass Personal Card
 
 Player Pass is a derivative FoloToy AI Passport application: a pocket electronic
-business card that shows a pixel avatar, profile text, game collection, a generic
-contact list, and a configurable NFC payload. All personal data lives on the device.
-There is no cloud account, login, or OTA update. The management console provides a
-manual JSON export/import; there is no automatic backup.
+business card that shows a pixel avatar, profile text, game collection, and a
+generic contact list. All personal data lives on the device. There is no cloud
+account, login, or OTA update. The management console provides a manual JSON
+export/import; there is no automatic backup.
 
 The firmware targets the documented ESP32-C3 board (8 MB Flash, no PSRAM,
 240 x 320 ST7789P3, three ADC-ladder buttons). It keeps board access in
@@ -22,7 +22,7 @@ The firmware targets the documented ESP32-C3 board (8 MB Flash, no PSRAM,
 | Input | Action |
 | --- | --- |
 | UP / DOWN short press | Move the selection, clamped at both ends |
-| OK short press | Enter a page, open a QR code, or show a detail panel |
+| OK short press | Enter a page or open a QR code |
 | OK long press | Go back one level / close an overlay |
 | OK double press on Home | Enter the management AP mode |
 
@@ -32,25 +32,21 @@ footer with its available actions.
 ### Pages
 
 1. **Home** - 92 x 92 avatar frame, name, one-line introduction, three display-only
-   platform rows (Steam / Switch / PSN) with their IDs, and three navigation rows
-   (Games, Contact, NFC). Pressing OK on a navigation row opens that page;
+   platform rows (Steam / Switch / PSN) with their IDs, and two navigation rows
+   (Games, Contact). Pressing OK on a navigation row opens that page;
    platform rows are not selectable.
-2. **Games** - one continuous list with two sections, "Favourite games" and
-   "Playing". Each row shows one portrait cover, the title, and a short note.
-   The list is rendered as a moving five-entry window, so the object count stays
-   small even if the stored list is long. OK opens the game detail page.
-3. **Game detail** - 72 x 108 cover, title, group badge, game-link status,
-   and introduction. If a link is configured, OK renders a QR code on the
-   device for the phone to scan.
-4. **Contact** - a generic list of entries, each with a platform name, the
+2. **Games** - one column of cover cards grouped into "Favourite games" and
+   "Playing". Each card shows a 216 x 101 Steam-style header cover above a
+   one-line title, with a small group icon. The selected card sits at the top
+   and the next card peeks in below, so the object count stays small even if
+   the stored list is long. OK renders a QR code for the game link, or shows a
+   notice when no link is configured.
+3. **Contact** - a generic list of entries, each with a platform name, the
    account on that platform, and an optional link. An entry with a link shows a
    QR marker and renders a 180 x 180 QR code on demand; an entry without a link
    opens a large read-only account panel instead. QR codes are never all shown
    at once.
-5. **NFC** - the configured label, type, and payload. The NTAG213 is a passive
-   tag with no MCU interface; the firmware displays the payload and can render a
-   QR copy, but it cannot write the tag. Write it with an NFC-capable phone.
-6. **Management mode** - a fixed screen with the WPA2 SSID, fixed password, a
+4. **Management mode** - a fixed screen with the WPA2 SSID, fixed password, a
    scannable QR code for the management URL, client/lease state, storage bar,
    and manual exit. Normal navigation is suspended until long-pressing OK.
 
@@ -72,8 +68,9 @@ of -1 renders `--` instead of a number.
 The device uses Fusion Pixel 12 px and 24 px bitmap fonts, hard 1-2 px borders,
 no rounded cards, and a shared 14 x 14 alpha-mask icon set. The management
 console mirrors the palette, hard borders, monospace numbers, and an empty
-background grid. It is a single offline page with no external fonts, scripts, or
-network requests.
+background grid. It is a single page with no external fonts or scripts; the
+optional Steam search and player playtime lists call the game-data service
+described below.
 
 ## Architecture
 
@@ -81,7 +78,7 @@ network requests.
 main/
   main.c                 BSP bring-up, then app_core_start()
   app/                   lifecycle, data loading, input worker, mode switching
-  data/                  profile, games, NFC models and JSON validation
+  data/                  profile and games models with JSON validation
   storage/               portable POSIX file layer, LittleFS mount, thresholds
   image/                 PPIM header, image loading, on-device QR rendering
   session/               lease state machine and optional idle timer
@@ -111,8 +108,8 @@ partition. NVS stores only Wi-Fi calibration data.
 | `factory` | app/factory | `0x10000` | `0x300000` | Single application image |
 | `storage` | data/littlefs | `0x310000` | `0x4F0000` | JSON records and images |
 
-The compressed application image in the delivery build is **2,121,392 bytes**
-(`0x205E70`). It fits the 3 MiB factory partition with 1,024,336 bytes (33%)
+The compressed application image in the delivery build is **2,123,136 bytes**
+(`0x206580`). It fits the 3 MiB factory partition with 1,022,592 bytes (33%)
 free, which leaves room for font regeneration. The data partition is
 `0x4F0000` bytes (about 4.94 MiB). A blank LittleFS partition is formatted on
 first boot; a non-blank partition that fails to mount is reported as corrupt
@@ -179,10 +176,31 @@ first browser to claim the lease edits; other browsers can
 read status and see that the device is occupied. Text changes and image uploads
 are written to LittleFS with temporary files and atomic replacement.
 
-The backup tab exports profile, games, NFC, and every image as one JSON file;
+Editing is local-first. The console keeps profile, games, and pending images
+in the browser and writes them with one **Save changes** action in the bottom
+bar; a part that fails stays marked unsaved and is retried by the next save. A
+lost Wi-Fi link only drops the edit lease: when the browser reconnects it
+re-claims the lease without reloading documents that already loaded, so unsaved
+edits survive. **Discard local changes** reloads everything from the device on
+demand, and reloading the page discards local edits.
+
+The backup tab exports profile, games, and every image as one JSON file;
 import overwrites the current data and requires the editor lease. See
 [data-and-api.md](data-and-api.md) for the storage format, backup format, and
 every API endpoint.
+
+The Games tab offers manual entry plus optional Steam-assisted entry. When the
+phone can reach the internet, it can search the Steam store; if the profile
+contains a Steam friend code (or a SteamID64), it can also list the player's
+recently played games and most-played games. Selecting a candidate fetches the
+localized name, short description, store link, and the 460 x 215 header cover
+from the game-detail endpoint. The console uses the localized description as
+the initial note, crops the cover to 216 x 101, and uploads it together with the
+other pending data when the user taps the single Save changes action. The
+console calls
+`https://player-pass.jhygreatbug.workers.dev` from the browser; the device AP
+itself has no upstream connection. Cover downloads from the Steam CDN rely on
+its CORS headers.
 
 ## Acceptance checklist
 
@@ -198,12 +216,11 @@ On the device (not established by a build):
 - Boots to the redesigned Home; avatar, name, tagline, IDs, battery render.
 - All three buttons: selection clamps, OK actions, long-OK back, double-OK on
   Home enters management mode.
-- Games sections and window scrolling; details; on-device QR generation.
+- Games card grid and window scrolling; on-device link QR generation.
 - Contact list browsing, account panels, and QR generation from links.
-- NFC page and QR payload.
 - Management AP is visible, WPA2 protected, and the screen shows SSID/password/
   URL; repeated enter/exit cycles do not leak tasks or sockets.
-- A phone opens the console; profile, games, images, contact, and NFC changes
+- A phone opens the console; profile, games, images, and contact changes
   persist across a reboot.
 - A second browser sees "occupied"; the first browser keeps the lease with
   heartbeats; grace, no automatic exit, and long-press OK exit behave as documented.
@@ -215,22 +232,22 @@ On the device (not established by a build):
 
 ## Delivery status
 
-Recorded for `feature/personal-passport` on 2026-11-11. A successful build is
-not hardware acceptance.
+Recorded for `main` on 2026-11-11 (Steam game entry, cover cards, and simplified
+pages). A successful build is not hardware acceptance.
 
 | Item | Result |
 | --- | --- |
-| Build | PASS - ESP-IDF 5.5.3; application 2,121,392 bytes (`0x205E70`); merged image 2,186,928 bytes |
-| Host tests | PASS - `./tools/validate.sh --static` and the complete `./tools/validate.sh` |
-| Device tests | NOT RUN - no USB Serial/JTAG device was detected in this environment |
-| Unverified | display/backlight/font rendering; all three buttons and navigation; Wi-Fi AP visibility and WPA2; phone console access, lease/grace and manual exit; image upload and persistence; contact list editing and link-generated QR codes; manual export/import; first-boot LittleFS format; battery readings; USB logs/flashing; phone cellular data behavior |
+| Build | PASS - ESP-IDF 5.5.3; application 2,123,136 bytes (`0x206580`); merged image 2,188,672 bytes |
+| Host tests | PASS - `./tools/validate.sh --static` and `./tools/validate.sh --firmware` |
+| Device tests | NOT RUN - a USB Serial/JTAG device is connected at `/dev/cu.usbmodem1432101`; flashing and acceptance are pending user approval |
+| Unverified | display/backlight/font rendering; all three buttons and navigation; Wi-Fi AP visibility and WPA2; phone console access, lease/grace and manual exit; image upload and persistence; contact list editing and link-generated QR codes; game-link QR codes from the games page; manual export/import; first-boot LittleFS format; battery readings; USB logs/flashing; phone cellular data behavior; Steam search and player playtime lists while the phone is online |
 
 Merged image: `build/FoloToy-AI-Passport-full.bin`
 
-SHA-256: `5c43b0e1ac6d178c7a28963b9c1e7813c7b657305c9d04323c125c33c98a99df`
+SHA-256: `0861684c4823429032896520c3977e7090b07a6355e0843180b5a13f6fc0cabe`
 
 Verified debug bundle:
-`build/firmware/5c43b0e1ac6d178c7a28963b9c1e7813c7b657305c9d04323c125c33c98a99df/`
+`build/firmware/0861684c4823429032896520c3977e7090b07a6355e0843180b5a13f6fc0cabe/`
 
 ## Management page does not respond
 
@@ -271,14 +288,14 @@ captive-portal probe URL or assume the phone will open the page automatically.
 
 ## Limitations and unverified behavior
 
-- The NTAG213 payload cannot be written by the firmware; it is configuration for
-  an external NFC writer.
 - Phone behaviour when the AP has no internet varies by OS. iOS usually keeps
   cellular data available; some Android devices route traffic through the AP and
   lose internet until it is disconnected. This is not verified for every model.
-- The web console never calls an external service. Game links are rendered as QR
-  codes for the phone; cross-origin and anti-bot behaviour are outside the
-  firmware. IGDB is only an outbound link in the cover editor.
+- The web console calls a Steam game-data service only for optional game search
+  and player playtime lists. Search terms and the Steam friend code entered in
+  the profile are sent to that service; profile, games, contacts, and images stay
+  on the device. Game links are rendered as QR codes for the phone; cross-origin
+  and anti-bot behaviour of external sites are outside the firmware.
 - The AP password is a fixed product password in the firmware. Anyone who knows it
   can join the AP; the console has no login. Rotate it by rebuilding the firmware.
 - Backup is manual JSON export/import only. There is no automatic backup, ZIP,

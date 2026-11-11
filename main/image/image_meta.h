@@ -19,8 +19,10 @@
 
 #define PP_IMAGE_AVATAR_W 88u
 #define PP_IMAGE_AVATAR_H 88u
-#define PP_IMAGE_COVER_W 72u
-#define PP_IMAGE_COVER_H 108u
+// Steam store header art is 460 x 215; one column of cards spans the full
+// 216 px content width, so the cover is stored at its display size.
+#define PP_IMAGE_COVER_W 216u
+#define PP_IMAGE_COVER_H 101u
 #define PP_IMAGE_QR_W 180u
 #define PP_IMAGE_QR_H 180u
 

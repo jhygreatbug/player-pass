@@ -10,7 +10,6 @@
 
 #include "bsp_button.h"
 #include "data/games.h"
-#include "data/nfc.h"
 #include "data/profile.h"
 #include "image/image_store.h"
 #include "storage/storage.h"
@@ -46,8 +45,8 @@ typedef struct {
 } ui_manage_info_t;
 
 void ui_app_set_data(const pp_storage_t *storage, const pp_profile_t *profile,
-                     const pp_profile_images_t *images, const pp_games_t *games,
-                     const pp_nfc_t *nfc);
+                     const pp_profile_images_t *images,
+                     const pp_games_t *games);
 void ui_app_set_battery(int soc_percent);
 
 void ui_app_show_boot(void);

@@ -3,7 +3,6 @@
 
 #include "cJSON.h"
 #include "data/games.h"
-#include "data/nfc.h"
 #include "data/profile.h"
 #include "pp_test.h"
 
@@ -280,51 +279,6 @@ static void test_games_validation(void)
     pp_games_free(&games);
 }
 
-static void test_nfc(void)
-{
-    pp_nfc_t nfc;
-    pp_nfc_defaults(&nfc);
-    CHECK(!nfc.enabled);
-    char error[128];
-    CHECK(pp_nfc_validate(&nfc, error, sizeof(error)));
-
-    snprintf(nfc.label, sizeof(nfc.label), "Homepage");
-    nfc.enabled = true;
-    nfc.type = PP_NFC_TYPE_URL;
-    snprintf(nfc.content, sizeof(nfc.content),
-             "https://example.com/user");
-    CHECK(pp_nfc_validate(&nfc, error, sizeof(error)));
-
-    char *json = pp_nfc_to_json(&nfc);
-    CHECK(json != NULL);
-    pp_nfc_t parsed;
-    CHECK(pp_nfc_from_json(json, &parsed, error, sizeof(error)));
-    CHECK(parsed.enabled);
-    CHECK(parsed.type == PP_NFC_TYPE_URL);
-    CHECK_STR_EQ(parsed.content, nfc.content);
-    cJSON_free(json);
-
-    nfc.type = PP_NFC_TYPE_URL;
-    snprintf(nfc.content, sizeof(nfc.content), "not a url");
-    CHECK(!pp_nfc_validate(&nfc, error, sizeof(error)));
-
-    nfc.type = PP_NFC_TYPE_TEXT;
-    snprintf(nfc.content, sizeof(nfc.content), "第一行\n第二行");
-    CHECK(pp_nfc_validate(&nfc, error, sizeof(error)));
-
-    nfc.enabled = true;
-    nfc.content[0] = '\0';
-    CHECK(!pp_nfc_validate(&nfc, error, sizeof(error)));
-
-    CHECK(pp_nfc_from_json("{\"version\":1,\"type\":\"url\"}", &parsed, error,
-                           sizeof(error)));
-    CHECK(pp_nfc_from_json("{\"version\":1,\"type\":\"text\",\"enabled\":false,"
-                           "\"content\":\"\"}",
-                           &parsed, error, sizeof(error)));
-    CHECK(!pp_nfc_from_json("{\"version\":2,\"type\":\"url\"}", &parsed, error,
-                            sizeof(error)));
-}
-
 int main(void)
 {
     test_profile_roundtrip();
@@ -333,6 +287,5 @@ int main(void)
     test_profile_legacy_migration();
     test_games_order_and_roundtrip();
     test_games_validation();
-    test_nfc();
     return pp_test_result("test_models");
 }

@@ -10,7 +10,9 @@
 
 const SPECS = {
   avatar: { width: 88, height: 88, crop: 'square' },
-  cover: { width: 72, height: 108, crop: 'cover' },
+  // The detail endpoint's `cover` is Steam's 460 x 215 header art; the device
+  // card spans the full 216 px content width, so the stored cover matches it.
+  cover: { width: 216, height: 101, crop: 'cover' },
 };
 
 const SLOT_FLAGS = {
@@ -40,15 +42,25 @@ const state = {
   token: null,
   canEdit: false,
   occupied: false,
-  loaded: false,
+  loaded: { profile: false, games: false },
+  claiming: false,
+  saving: false,
   profile: null,
   games: [],
-  nfc: null,
   status: null,
   imageCache: new Map(),
   pending: new Map(),
-  dirty: { profile: false, games: false, nfc: false },
+  pendingDeletes: new Set(),
+  dirty: { profile: false, games: false },
+  revision: { profile: 0, games: 0 },
   editor: { index: -1, isNew: false },
+  gamePicker: {
+    source: 'search',
+    searchTimer: null,
+    searchGeneration: 0,
+    listGeneration: 0,
+    details: new Map(),
+  },
   claimTimer: null,
   heartbeatTimer: null,
   statusTimer: null,
@@ -122,6 +134,7 @@ function clearError() {
 }
 
 function setDirty(tab, dirty) {
+  if (dirty) state.revision[tab] += 1;
   state.dirty[tab] = dirty;
   const nodes = tab === 'profile'
     ? [$('#profile-dirty'), $('#contact-dirty')]
@@ -129,10 +142,50 @@ function setDirty(tab, dirty) {
   nodes.forEach(node => {
     if (node) node.textContent = dirty ? '有未保存的更改' : '';
   });
+  updateSaveBar();
 }
 
 function anyDirty() {
-  return state.dirty.profile || state.dirty.games || state.dirty.nfc;
+  return state.dirty.profile || state.dirty.games;
+}
+
+function imagesDirty() {
+  return state.pending.size > 0 || state.pendingDeletes.size > 0;
+}
+
+function hasUnsavedChanges() {
+  return anyDirty() || imagesDirty();
+}
+
+function setPendingImage(slot, bytes) {
+  state.pending.set(slot, bytes);
+  state.pendingDeletes.delete(slot);
+  updateSaveBar();
+}
+
+function updateSaveBar() {
+  const button = $('#save-all');
+  if (!button) return;
+  const status = $('#save-status');
+  const reload = $('#reload-device');
+  const dirty = hasUnsavedChanges();
+  const editable = state.canEdit && !document.body.classList.contains('readonly');
+  const parts = [];
+  if (state.dirty.profile) parts.push('资料');
+  if (state.dirty.games) parts.push('游戏');
+  if (imagesDirty()) parts.push('图片');
+  button.disabled = !editable || state.saving || !dirty;
+  button.textContent = state.saving ? '保存中…' : '保存更改';
+  if (reload) {
+    reload.disabled = state.saving;
+    reload.textContent = dirty ? '放弃本地更改' : '重新加载';
+  }
+  if (status) {
+    if (state.saving) status.textContent = '正在保存到设备…';
+    else if (!editable) status.textContent = '当前为只读，取得编辑权限后可保存';
+    else if (dirty) status.textContent = `未保存：${parts.join('、')}`;
+    else status.textContent = '所有更改已保存';
+  }
 }
 
 /* --------------------------------- API ----------------------------------- */
@@ -180,7 +233,7 @@ function handleAuthError(error) {
   if (error && error.status === 401) {
     state.canEdit = false;
     state.token = null;
-    applyReadOnly(true);
+    setReadOnly(true);
     updateSessionBanner();
     scheduleClaimRetry(1500);
     return true;
@@ -208,6 +261,8 @@ function setReadOnly(readonly) {
   });
   $('#retry-claim').disabled = false;
   renderContacts();
+  updatePickerTabs();
+  updateSaveBar();
 }
 
 function updateChips() {
@@ -247,11 +302,13 @@ function updateSessionBanner() {
 }
 
 async function claim() {
+  if (state.claiming) return;
   if (state.canEdit && state.token) return;
   if (state.claimTimer) {
     clearTimeout(state.claimTimer);
     state.claimTimer = null;
   }
+  state.claiming = true;
   try {
     const reply = await api('/api/session/claim', {
       method: 'POST',
@@ -267,12 +324,13 @@ async function claim() {
     clearError();
     // Keep the form disabled until the first data load completes so a fast
     // typist cannot fill fields that are about to be replaced.
-    setReadOnly(!state.loaded);
+    setReadOnly(!state.loaded.profile);
     updateSessionBanner();
     startHeartbeat();
-    if (state.loaded) {
-      await reloadAll();
-    }
+    // A reconnect must not discard local edits: only documents that never
+    // loaded successfully are fetched again.
+    await loadMissingDocuments();
+    setReadOnly(!state.loaded.profile);
   } catch (error) {
     if (error.status === 409) {
       state.occupied = true;
@@ -294,6 +352,8 @@ async function claim() {
       showError(error.message);
       scheduleClaimRetry(5000);
     }
+  } finally {
+    state.claiming = false;
   }
 }
 
@@ -339,10 +399,9 @@ async function pollStatus() {
     renderStatus(status);
     const session = status.session || {};
     if (session.editor) {
-      if (!state.canEdit) {
-        state.canEdit = true;
-        setReadOnly(false);
-      }
+      // The device still considers this browser the editor; claim again to
+      // recover the token after a 401 instead of touching local data.
+      if (!state.canEdit) claim();
     } else if (state.canEdit && state.token) {
       state.canEdit = false;
       state.token = null;
@@ -519,9 +578,8 @@ function decodePpim(buffer) {
   return { width, height, imageData };
 }
 
-async function processImage(file, kind) {
+async function processBitmap(bitmap, kind) {
   const spec = SPECS[kind];
-  const bitmap = await fileToBitmap(file);
   const canvas = document.createElement('canvas');
   canvas.width = spec.width;
   canvas.height = spec.height;
@@ -547,6 +605,11 @@ async function processImage(file, kind) {
   if (bitmap.close) bitmap.close();
   const imageData = ctx.getImageData(0, 0, spec.width, spec.height);
   return { bytes: encodePpim(spec, imageData), canvas, kind };
+}
+
+async function processImage(file, kind) {
+  const bitmap = await fileToBitmap(file);
+  return processBitmap(bitmap, kind);
 }
 
 function drawCanvasInto(target, source) {
@@ -604,13 +667,24 @@ function setImageStatus(card, message, isError) {
   node.classList.toggle('error-text', !!isError);
 }
 
+function setImageCardStatus(slot, message, isError) {
+  const card = $(`.image-card[data-slot="${slot}"]`);
+  if (card) setImageStatus(card, message, isError);
+}
+
+function imageOnDevice(slot) {
+  if (state.pendingDeletes.has(slot)) return false;
+  if (state.imageCache.has(slot)) return true;
+  const flag = state.profile && state.profile.images ? state.profile.images[SLOT_FLAGS[slot]] : false;
+  return !!flag;
+}
+
 function setupImageCard(card) {
   const slot = card.dataset.slot;
   const kind = card.dataset.kind;
   const canvas = $('canvas', card);
   const preview = $('.preview', card);
   const input = $('.file-input', card);
-  const upload = $('[data-action="upload"]', card);
   const remove = $('[data-action="remove"]', card);
 
   input.addEventListener('change', async () => {
@@ -618,10 +692,10 @@ function setupImageCard(card) {
     if (!file) return;
     try {
       const processed = await processImage(file, kind);
-      state.pending.set(slot, processed.bytes);
+      setPendingImage(slot, processed.bytes);
       drawCanvasInto(canvas, processed.canvas);
       markPreview(preview, true);
-      setImageStatus(card, '已生成预览，点击“上传”保存到设备', false);
+      setImageStatus(card, '已生成预览，点击“保存更改”写入设备', false);
     } catch (error) {
       input.value = '';
       setImageStatus(card, error.message, true);
@@ -629,67 +703,34 @@ function setupImageCard(card) {
     }
   });
 
-  upload.addEventListener('click', async () => {
+  remove.addEventListener('click', () => {
     if (!requireEdit()) return;
-    const bytes = state.pending.get(slot);
-    if (!bytes) {
-      setImageStatus(card, '请先选择一张图片', true);
+    const wasPending = state.pending.has(slot);
+    const onDevice = imageOnDevice(slot);
+    if (wasPending) {
+      state.pending.delete(slot);
+      input.value = '';
+      if (onDevice) {
+        loadSlotInto(slot, canvas, preview);
+        setImageStatus(card, '已取消待上传的图片，仍使用设备上的图片', false);
+      } else {
+        clearPreview(canvas, preview);
+        setImageStatus(card, '已取消待上传的图片', false);
+      }
+      updateSaveBar();
       return;
     }
-    setImageStatus(card, '上传中…', false);
-    upload.disabled = true;
-    try {
-      const response = await fetch(`/api/images/${slot}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/octet-stream', 'X-PP-Token': state.token },
-        body: bytes,
-      });
-      const text = await response.text();
-      let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch (ignored) { data = null; }
-      if (!response.ok) {
-        const error = new Error((data && data.message) || `上传失败（HTTP ${response.status}）`);
-        error.status = response.status;
-        throw error;
-      }
-      state.pending.delete(slot);
-      state.imageCache.set(slot, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-      setImageStatus(card, '上传成功', false);
-      if (state.profile && state.profile.images && SLOT_FLAGS[slot]) {
-        state.profile.images[SLOT_FLAGS[slot]] = true;
-      }
-      toast('图片已保存到设备');
-      pollStatus();
-    } catch (error) {
-      if (handleAuthError(error)) setImageStatus(card, '编辑权限已失效，请重试', true);
-      else setImageStatus(card, error.message, true);
-      toast(error.message, 'error');
-    } finally {
-      upload.disabled = !state.canEdit;
+    if (!onDevice) return;
+    if (!confirm('移除这张图片？设备上的文件会在保存后删除。')) return;
+    input.value = '';
+    state.pendingDeletes.add(slot);
+    state.imageCache.delete(slot);
+    clearPreview(canvas, preview);
+    if (state.profile && state.profile.images && SLOT_FLAGS[slot]) {
+      state.profile.images[SLOT_FLAGS[slot]] = false;
     }
-  });
-
-  remove.addEventListener('click', async () => {
-    if (!requireEdit()) return;
-    if (!confirm('移除这张图片？设备上的文件会被删除。')) return;
-    try {
-      await api(`/api/images/${slot}`, { method: 'DELETE', token: state.token });
-      state.pending.delete(slot);
-      state.imageCache.delete(slot);
-      clearPreview(canvas, preview);
-      input.value = '';
-      if (state.profile && state.profile.images && SLOT_FLAGS[slot]) {
-        state.profile.images[SLOT_FLAGS[slot]] = false;
-      }
-      setImageStatus(card, '已移除', false);
-      toast('图片已移除');
-      pollStatus();
-    } catch (error) {
-      if (!handleAuthError(error)) {
-        setImageStatus(card, error.message, true);
-        toast(error.message, 'error');
-      }
-    }
+    setImageStatus(card, '保存后将移除设备上的图片', false);
+    updateSaveBar();
   });
 }
 
@@ -701,7 +742,7 @@ async function loadInitialImages() {
   for (const card of cards) {
     if (generation !== imageLoadGeneration) return;
     const slot = card.dataset.slot;
-    if (state.pending.has(slot)) continue;
+    if (state.pending.has(slot) || state.pendingDeletes.has(slot)) continue;
     const canvas = $('canvas', card);
     const preview = $('.preview', card);
     const flag = state.profile && state.profile.images ? state.profile.images[SLOT_FLAGS[slot]] : false;
@@ -937,48 +978,139 @@ async function validateTexts(entries) {
   return bad;
 }
 
-async function saveProfile() {
-  if (!requireEdit()) return;
-  if (!state.profile) {
-    toast('个人资料尚未加载，请刷新页面', 'error');
-    return;
-  }
-  const payload = profilePayload();
-  const clientError = validateProfileClient(payload);
-  if (clientError) {
-    toast(clientError, 'error');
-    return;
-  }
-  const entries = [
-    { label: '姓名', text: payload.name },
-    { label: '个人介绍', text: payload.tagline },
-    { label: 'Steam ID', text: payload.platforms.steam.id },
-    { label: 'Switch ID', text: payload.platforms.switch.id },
-    { label: 'PlayStation ID', text: payload.platforms.playstation.id },
-  ];
-  filledContacts().forEach(contact => {
-    const number = contact.index + 1;
-    entries.push({ label: `联系方式${number}平台`, text: contact.platform });
-    entries.push({ label: `联系方式${number}账号`, text: contact.account });
-    entries.push({ label: `联系方式${number}链接`, text: contact.link });
-  });  try {
-    const bad = await validateTexts(entries);
-    if (bad.length) {
-      toast(bad[0], 'error');
-      return;
-    }
-    const reply = await api('/api/profile', { method: 'PUT', body: payload, token: state.token });
-    state.profile = reply;
-    if (!state.profile.images) state.profile.images = {};
-    if (!Array.isArray(state.profile.contacts)) state.profile.contacts = [];
-    fillProfileForm();
-    renderContacts();
-    setDirty('profile', false);
-    loadInitialImages();
-    toast('资料已保存到设备');
-    pollStatus();
+// Steam game data comes from the user's own Cloudflare Worker. The device AP
+// has no internet path, so these calls only work when the phone itself can
+// reach the internet; any failure must leave manual game entry fully usable.
+const GAME_API_BASE = 'https://player-pass.jhygreatbug.workers.dev';
+const GAME_API_PREFIX = '/api/v1';
+const GAME_MAX_TITLE = 40;
+
+const GAME_API_ERRORS = {
+  INVALID_PARAMS: '请求参数有误',
+  INVALID_STEAM_ID: 'Steam 好友码或 SteamID 格式不正确',
+  GAME_NOT_FOUND: '游戏不存在',
+  PLAYER_DATA_UNAVAILABLE: '玩家资料未公开，或暂无游玩记录',
+  CHINESE_DATA_UNAVAILABLE: '该游戏暂无官方简体中文资料',
+  UPSTREAM_ERROR: 'Steam 服务暂时不可用，请稍后再试',
+  UPSTREAM_TIMEOUT: 'Steam 服务响应超时，请稍后再试',
+  RATE_LIMITED: '请求过于频繁，请稍后再试',
+  STEAM_API_KEY_MISSING: '游戏资料服务未配置 Steam API Key',
+  INTERNAL_ERROR: '游戏资料服务内部错误',
+};
+
+function backendMessage(code, data) {
+  if (GAME_API_ERRORS[code]) return GAME_API_ERRORS[code];
+  return (data && data.error && data.error.message) || '游戏资料服务请求失败';
+}
+
+async function gameApi(path) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let response;
+  try {
+    response = await fetch(`${GAME_API_BASE}${GAME_API_PREFIX}${path}`, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
   } catch (error) {
-    if (!handleAuthError(error)) toast(error.message, 'error');
+    const wrapped = new Error(
+      controller.signal.aborted
+        ? '游戏资料服务响应超时，请稍后再试'
+        : '无法连接游戏资料服务，请确认手机可以访问互联网'
+    );
+    wrapped.code = controller.signal.aborted ? 'CLIENT_TIMEOUT' : 'CLIENT_NETWORK';
+    throw wrapped;
+  } finally {
+    clearTimeout(timer);
+  }
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (parseError) {
+    data = null;
+  }
+  if (!response.ok || !data || data.success === false) {
+    const code = data && data.error && data.error.code ? data.error.code : `HTTP_${response.status}`;
+    const wrapped = new Error(backendMessage(code, data));
+    wrapped.code = code;
+    wrapped.status = response.status;
+    throw wrapped;
+  }
+  return data.data;
+}
+
+// SteamID64 or a numeric friend code; the worker converts friend codes itself.
+function steamLookupId() {
+  const value = state.profile && state.profile.platforms && state.profile.platforms.steam
+    ? (state.profile.platforms.steam.id || '').trim()
+    : '';
+  if (/^[1-9]\d{0,9}$/.test(value)) return value;
+  if (/^\d{17}$/.test(value)) return value;
+  return '';
+}
+
+function formatPlaytime(minutes) {
+  const value = Math.max(0, Math.round(Number(minutes) || 0));
+  if (value < 60) return `${value} 分钟`;
+  const hours = value / 60;
+  return hours >= 100 ? `${Math.round(hours)} 小时` : `${hours.toFixed(1)} 小时`;
+}
+
+function formatPlayedAt(value) {
+  if (!value) return '无记录';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '无记录';
+  const pad = number => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// Steam's short description is HTML; the note field is plain text.
+function htmlToPlainText(html) {
+  if (!html) return '';
+  const template = document.createElement('template');
+  template.innerHTML = String(html);
+  return (template.content.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function clipCodePoints(text, max) {
+  return Array.from(text || '').slice(0, max).join('');
+}
+
+async function fetchGameDetail(appId) {
+  const key = String(appId);
+  if (state.gamePicker.details.has(key)) return state.gamePicker.details.get(key);
+  const detail = await gameApi(`/games/${key}`);
+  state.gamePicker.details.set(key, detail);
+  return detail;
+}
+
+async function fetchImageBitmap(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(url, { mode: 'cors', signal: controller.signal });
+    if (!response.ok) throw new Error(`封面下载失败（HTTP ${response.status}）`);
+    const blob = await response.blob();
+    try {
+      return await createImageBitmap(blob);
+    } catch (ignored) {
+      // Fallback for browsers without createImageBitmap support.
+      return await new Promise((resolve, reject) => {
+        const objectUrl = URL.createObjectURL(blob);
+        const image = new Image();
+        image.onload = () => {
+          URL.revokeObjectURL(objectUrl);
+          resolve(image);
+        };
+        image.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+          reject(new Error('封面无法解码'));
+        };
+        image.src = objectUrl;
+      });
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -991,17 +1123,28 @@ function newGameId() {
   return `g-${Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')}`;
 }
 
-function groupLabel(group) {
-  return group === 'playing' ? '正在玩' : '喜欢的游戏';
+function gameAppId(game) {
+  if (!game) return null;
+  if (game.__appId) return game.__appId;
+  const match = /store\.steampowered\.com\/app\/(\d+)/i.exec(game.link || '');
+  return match ? Number(match[1]) : null;
+}
+
+function findGameByAppId(appId) {
+  return state.games.find(game => gameAppId(game) === appId);
 }
 
 async function loadGames() {
   try {
     const reply = await api('/api/games');
     state.games = reply.games || [];
+    state.loaded.games = true;
     renderGames();
+    updateSaveBar();
+    return true;
   } catch (error) {
     showError(error.message);
+    return false;
   }
 }
 
@@ -1016,48 +1159,62 @@ async function loadGameCoversSequentially(jobs) {
 }
 
 function renderGames() {
-  const list = $('#games-list');
-  list.replaceChildren();
+  const container = $('#games-groups');
+  if (!container) return;
+  container.replaceChildren();
   const coverJobs = [];
   $('#games-empty').classList.toggle('hidden', state.games.length > 0);
-  state.games.forEach((game, index) => {
-    const card = el('div', 'game-card');
-    const cover = el('div', 'game-cover');
-    const canvas = document.createElement('canvas');
-    canvas.width = 48;
-    canvas.height = 72;
-    cover.append(canvas, el('span', 'placeholder', '无封面'));
-    const main = el('div', 'game-main');
-    main.append(
-      el('div', 'game-title', game.title || '未命名游戏'),
-      el('div', 'game-note', game.note || '—'),
-    );
-    const meta = el('div', 'game-meta');
-    const badge = el('span', `group-badge ${game.group === 'playing' ? 'playing' : ''}`, groupLabel(game.group));
-    meta.append(badge, el('span', 'muted small', game.link ? '已设置链接' : '未设置链接'));
-    main.append(meta);
-    const actions = el('div', 'game-actions');
-    const up = el('button', 'btn small ghost', '↑');
-    const down = el('button', 'btn small ghost', '↓');
-    const edit = el('button', 'btn small', '编辑');
-    const del = el('button', 'btn small danger', '删除');
-    up.disabled = index === 0;
-    down.disabled = index === state.games.length - 1;
-    [up, down, edit, del].forEach(button => button.setAttribute('data-mutation', ''));
-    up.addEventListener('click', () => moveGame(index, -1));
-    down.addEventListener('click', () => moveGame(index, 1));
-    edit.addEventListener('click', () => openEditor(index));
-    del.addEventListener('click', () => deleteGame(index));
-    actions.append(up, down, edit, del);
-    card.append(cover, main, actions);
-    list.append(card);
-    if (game.cover) coverJobs.push({ id: game.id, canvas, container: cover });
-    else markPreview(cover, false);
+  const groups = [
+    { key: 'favorite', label: '喜欢的游戏' },
+    { key: 'playing', label: '正在玩的游戏' },
+  ];
+  groups.forEach(group => {
+    const entries = state.games
+      .map((game, index) => ({ game, index }))
+      .filter(entry => (entry.game.group || 'favorite') === group.key);
+    const section = el('section', 'game-section');
+    const head = el('div', 'game-section-head');
+    head.append(el('span', 'accent'));
+    head.append(el('span', 'game-section-title', group.label));
+    head.append(el('span', 'muted small', `${entries.length} 款`));
+    section.append(head);
+
+    const tiles = el('div', 'game-tiles');
+    entries.forEach(({ game, index }) => {
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'game-tile';
+      tile.setAttribute('data-mutation', '');
+      if (game.__new) tile.classList.add('unsaved');
+      if (!state.canEdit) tile.disabled = true;
+      tile.addEventListener('click', () => openEditor(index));
+
+      const cover = el('span', 'game-tile-cover');
+      const canvas = document.createElement('canvas');
+      canvas.width = SPECS.cover.width;
+      canvas.height = SPECS.cover.height;
+      cover.append(canvas, el('span', 'placeholder', '无封面'));
+      tile.append(cover, el('span', 'game-tile-title', game.title || '未命名游戏'));
+      tiles.append(tile);
+
+      const pending = state.pending.get(`games/${game.id}`);
+      if (pending) {
+        try {
+          drawImageDataInto(canvas, decodePpim(pending.buffer));
+          markPreview(cover, true);
+        } catch (ignored) {
+          markPreview(cover, false);
+        }
+      } else if (game.cover) {
+        coverJobs.push({ id: game.id, canvas, container: cover });
+      } else {
+        markPreview(cover, false);
+      }
+    });
+    section.append(tiles);
+    container.append(section);
   });
   loadGameCoversSequentially(coverJobs);
-  $$('#games-list button').forEach(button => {
-    if (button.hasAttribute('data-mutation') && !state.canEdit) button.disabled = true;
-  });
 }
 
 async function loadGameCover(id, canvas, container) {
@@ -1069,28 +1226,6 @@ async function loadGameCover(id, canvas, container) {
   } catch (error) {
     markPreview(container, false);
   }
-}
-
-function moveGame(index, delta) {
-  if (!requireEdit()) return;
-  if (state.editor.index >= 0) closeEditor(false);
-  const target = index + delta;
-  if (target < 0 || target >= state.games.length) return;
-  const [game] = state.games.splice(index, 1);
-  state.games.splice(target, 0, game);
-  setDirty('games', true);
-  renderGames();
-}
-
-function deleteGame(index) {
-  if (!requireEdit()) return;
-  if (state.editor.index >= 0) closeEditor(false);
-  const game = state.games[index];
-  if (!confirm(`删除「${game.title || '未命名游戏'}」？保存列表后设备上的封面也会被清理。`)) return;
-  state.games.splice(index, 1);
-  setDirty('games', true);
-  if (state.editor.index === index) closeEditor(true);
-  renderGames();
 }
 
 function openEditor(index) {
@@ -1105,14 +1240,51 @@ function openEditor(index) {
   $('#g-link').value = game.link || '';
   updateCounter($('#g-title'));
   updateCounter($('#g-note'));
-  $('#g-cover-status').textContent = game.cover ? '已有封面' : '';
+
+  const slot = `games/${game.id}`;
   const coverCanvas = $('#g-cover');
   const coverPreview = coverCanvas.closest('.preview');
-  state.pending.delete(`games/${game.id}`);
-  if (game.cover) loadSlotInto(`games/${game.id}`, coverCanvas, coverPreview);
-  else clearPreview(coverCanvas, coverPreview);
+  const pending = state.pending.get(slot);
+  if (pending) {
+    try {
+      drawImageDataInto(coverCanvas, decodePpim(pending.buffer));
+      markPreview(coverPreview, true);
+    } catch (ignored) {
+      clearPreview(coverCanvas, coverPreview);
+    }
+    $('#g-cover-status').textContent = '已生成预览，点击底部“保存更改”写入设备';
+  } else if (state.pendingDeletes.has(slot)) {
+    clearPreview(coverCanvas, coverPreview);
+    $('#g-cover-status').textContent = '保存后将移除封面';
+  } else if (game.cover) {
+    $('#g-cover-status').textContent = '已有封面';
+    loadSlotInto(slot, coverCanvas, coverPreview);
+  } else {
+    clearPreview(coverCanvas, coverPreview);
+    $('#g-cover-status').textContent = '';
+  }
+  updateEditorMoveButtons();
   $('#game-editor').classList.remove('hidden');
   $('#game-editor').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function updateEditorMoveButtons() {
+  const game = state.games[state.editor.index];
+  const up = $('#game-editor-up');
+  const down = $('#game-editor-down');
+  const del = $('#game-editor-delete');
+  if (!game) {
+    [up, down, del].forEach(button => {
+      if (button) button.disabled = true;
+    });
+    return;
+  }
+  const group = game.group || 'favorite';
+  const siblings = state.games.filter(item => (item.group || 'favorite') === group);
+  const position = siblings.indexOf(game);
+  if (up) up.disabled = !state.canEdit || position <= 0;
+  if (down) down.disabled = !state.canEdit || position < 0 || position >= siblings.length - 1;
+  if (del) del.disabled = !state.canEdit;
 }
 
 function closeEditor(removeNew) {
@@ -1121,6 +1293,7 @@ function closeEditor(removeNew) {
     const id = state.games[index].id;
     state.games.splice(index, 1);
     state.pending.delete(`games/${id}`);
+    state.pendingDeletes.delete(`games/${id}`);
     setDirty('games', true);
   } else if (index >= 0 && state.games[index]) {
     delete state.games[index].__new;
@@ -1131,205 +1304,439 @@ function closeEditor(removeNew) {
   renderGames();
 }
 
+function editorValues() {
+  return {
+    title: $('#g-title').value.trim(),
+    group: $('#g-group').value,
+    note: $('#g-note').value.trim(),
+    link: $('#g-link').value.trim(),
+  };
+}
+
+function validateEditorValues(values) {
+  if (!values.title) return '游戏名称不能为空';
+  if (codePoints(values.title) > 40) return '游戏名称不能超过 40 个字';
+  if (codePoints(values.note) > 120) return '游戏介绍不能超过 120 个字';
+  if (values.link && !/^https?:\/\/\S+$/i.test(values.link)) {
+    return '通用链接必须以 http:// 或 https:// 开头';
+  }
+  return null;
+}
+
+// Applies the open editor to the list without touching the device.  Returns an
+// error message, or null after the editor closes.
+function commitEditorFields() {
+  const index = state.editor.index;
+  const game = state.games[index];
+  if (!game) return null;
+  const values = editorValues();
+  const error = validateEditorValues(values);
+  if (error) return error;
+  game.title = values.title;
+  game.group = values.group;
+  game.note = values.note;
+  game.link = values.link;
+  delete game.__new;
+  state.editor.index = -1;
+  state.editor.isNew = false;
+  $('#game-editor').classList.add('hidden');
+  setDirty('games', true);
+  renderGames();
+  return null;
+}
+
 function saveEditorToList() {
+  if (!requireEdit()) return;
+  const error = commitEditorFields();
+  if (error) {
+    toast(error, 'error');
+    return;
+  }
+  toast('已保存到列表，点击底部“保存更改”写入设备');
+}
+
+function validateGamesClient(games) {
+  for (const game of games) {
+    const title = (game.title || '').trim();
+    if (!title) return '每款游戏都需要名称';
+    if (codePoints(title) > 40) return `游戏名称「${title}」不能超过 40 个字`;
+    if (codePoints(game.note || '') > 120) return `「${title}」的游戏介绍不能超过 120 个字`;
+    if (game.link && !/^https?:\/\/\S+$/i.test(game.link)) {
+      return `「${title}」的通用链接必须以 http:// 或 https:// 开头`;
+    }
+  }
+  return null;
+}
+
+function moveEditorGame(delta) {
+  if (!requireEdit()) return;
+  const game = state.games[state.editor.index];
+  if (!game) return;
+  const group = game.group || 'favorite';
+  const siblings = state.games.filter(item => (item.group || 'favorite') === group);
+  const position = siblings.indexOf(game);
+  const target = position + delta;
+  if (position < 0 || target < 0 || target >= siblings.length) return;
+  const other = siblings[target];
+  const first = state.games.indexOf(game);
+  const second = state.games.indexOf(other);
+  state.games[first] = other;
+  state.games[second] = game;
+  state.editor.index = second;
+  setDirty('games', true);
+  updateEditorMoveButtons();
+  renderGames();
+}
+
+function deleteEditorGame() {
   if (!requireEdit()) return;
   const index = state.editor.index;
   const game = state.games[index];
   if (!game) return;
-  const title = $('#g-title').value.trim();
-  const note = $('#g-note').value.trim();
-  const link = $('#g-link').value.trim();
-  if (!title) {
-    toast('游戏名称不能为空', 'error');
-    return;
-  }
-  if (codePoints(title) > 40) {
-    toast('游戏名称不能超过 40 个字', 'error');
-    return;
-  }
-  if (codePoints(note) > 120) {
-    toast('游戏介绍不能超过 120 个字', 'error');
-    return;
-  }
-  if (link && !/^https?:\/\/\S+$/i.test(link)) {
-    toast('通用链接必须以 http:// 或 https:// 开头', 'error');
-    return;
-  }
-  game.title = title;
-  game.group = $('#g-group').value;
-  game.note = note;
-  game.link = link;
-  delete game.__new;
-  state.editor.isNew = false;
+  if (!confirm(`删除「${game.title || '未命名游戏'}」？保存后设备上的封面也会被清理。`)) return;
+  state.pending.delete(`games/${game.id}`);
+  state.pendingDeletes.delete(`games/${game.id}`);
+  state.games.splice(index, 1);
   setDirty('games', true);
-  closeEditor(false);
-  toast('已保存到列表，记得点击“保存游戏列表”写入设备');
+  state.editor.index = -1;
+  state.editor.isNew = false;
+  $('#game-editor').classList.add('hidden');
+  renderGames();
 }
 
-async function saveGames() {
-  if (!requireEdit()) return;
-  if (state.editor.index >= 0) {
-    toast('请先点击“保存到列表”，再保存整份游戏列表', 'warn');
-    return;
-  }
-  if (state.games.some(game => !game.title.trim())) {
-    toast('每款游戏都需要名称', 'error');
-    return;
-  }
-  const entries = [];
-  state.games.forEach(game => {
-    entries.push({ label: `游戏名称「${game.title}」`, text: game.title });
-    entries.push({ label: `游戏介绍「${game.title}」`, text: game.note });
-    entries.push({ label: `通用链接「${game.title}」`, text: game.link });
-  });
+async function putImageBytes(slot, bytes) {
+  let response;
   try {
-    const bad = await validateTexts(entries);
-    if (bad.length) {
-      toast(bad[0], 'error');
-      return;
-    }
-    const payload = {
-      version: 1,
-      games: state.games.map(game => ({
-        id: game.id,
-        title: game.title,
-        group: game.group,
-        note: game.note || '',
-        link: game.link || '',
-      })),
-    };
-    const reply = await api('/api/games', { method: 'PUT', body: payload, token: state.token });
-    state.games = reply.games || [];
-    setDirty('games', false);
-    renderGames();
-    toast('游戏列表已保存');
-    pollStatus();
-  } catch (error) {
-    if (!handleAuthError(error)) toast(error.message, 'error');
-  }
-}
-
-async function uploadGameCover() {
-  if (!requireEdit()) return;
-  const game = state.games[state.editor.index];
-  if (!game) return;
-  const slot = `games/${game.id}`;
-  const bytes = state.pending.get(slot);
-  if (!bytes) {
-    $('#g-cover-status').textContent = '请先选择封面图片';
-    return;
-  }
-  $('#g-cover-status').textContent = '上传中…';
-  try {
-    const response = await fetch(`/api/images/${slot}`, {
+    response = await fetch(`/api/images/${slot}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/octet-stream', 'X-PP-Token': state.token },
       body: bytes,
     });
-    const text = await response.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch (ignored) { data = null; }
-    if (!response.ok) {
-      const error = new Error((data && data.message) || `上传失败（HTTP ${response.status}）`);
-      error.status = response.status;
-      throw error;
-    }
-    state.pending.delete(slot);
-    state.imageCache.set(slot, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-    game.cover = true;
-    $('#g-cover-status').textContent = '封面已上传';
-    renderGames();
-    toast('封面已保存到设备');
-  } catch (error) {
-    if (handleAuthError(error)) $('#g-cover-status').textContent = '编辑权限已失效';
-    else $('#g-cover-status').textContent = error.message;
-    toast(error.message, 'error');
+  } catch (networkError) {
+    const error = new Error('无法连接设备，请确认手机仍连接着 PlayerPass 热点');
+    error.status = 0;
+    throw error;
   }
+  const text = await response.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (ignored) { data = null; }
+  if (!response.ok) {
+    const error = new Error((data && data.message) || `上传失败（HTTP ${response.status}）`);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
 }
 
-async function removeGameCover() {
+function removeGameCover() {
   if (!requireEdit()) return;
   const game = state.games[state.editor.index];
   if (!game) return;
-  if (!confirm('移除这张游戏封面？')) return;
-  try {
-    await api(`/api/images/games/${game.id}`, { method: 'DELETE', token: state.token });
-    game.cover = false;
-    state.pending.delete(`games/${game.id}`);
-    state.imageCache.delete(`games/${game.id}`);
-    clearPreview($('#g-cover'), $('#g-cover').closest('.preview'));
-    $('#g-cover-status').textContent = '封面已移除';
-    renderGames();
-    toast('封面已移除');
-  } catch (error) {
-    if (!handleAuthError(error)) toast(error.message, 'error');
-  }
-}
-
-/* --------------------------------- NFC ----------------------------------- */
-
-function fillNfcForm() {
-  $('#n-enabled').checked = !!state.nfc.enabled;
-  $('#n-label').value = state.nfc.label || '';
-  $('#n-type').value = state.nfc.type || 'url';
-  $('#n-content').value = state.nfc.content || '';
-  ['#n-label', '#n-content'].forEach(selector => updateCounter($(selector)));
-}
-
-async function loadNfc() {
-  try {
-    state.nfc = await api('/api/nfc');
-    fillNfcForm();
-  } catch (error) {
-    showError(error.message);
-  }
-}
-
-async function saveNfc() {
-  if (!requireEdit()) return;
-  const enabled = $('#n-enabled').checked;
-  const label = $('#n-label').value.trim();
-  const type = $('#n-type').value;
-  const content = $('#n-content').value.trim();
-  if (!label) {
-    toast('入口名称不能为空', 'error');
-    return;
-  }
-  if (codePoints(label) > 16) {
-    toast('入口名称不能超过 16 个字', 'error');
-    return;
-  }
-  if (codePoints(content) > 160) {
-    toast('NFC 内容不能超过 160 个字', 'error');
-    return;
-  }
-  if (enabled && !content) {
-    toast('启用 NFC 时需要填写内容', 'error');
-    return;
-  }
-  if (enabled && type === 'url' && !/^https?:\/\/\S+$/i.test(content)) {
-    toast('网址类型必须以 http:// 或 https:// 开头', 'error');
-    return;
-  }
-  try {
-    const bad = await validateTexts([
-      { label: 'NFC 名称', text: label },
-      { label: 'NFC 内容', text: content },
-    ]);
-    if (bad.length) {
-      toast(bad[0], 'error');
-      return;
+  const slot = `games/${game.id}`;
+  const preview = $('#g-cover').closest('.preview');
+  if (state.pending.has(slot)) {
+    state.pending.delete(slot);
+    if (game.cover) {
+      loadSlotInto(slot, $('#g-cover'), preview);
+      $('#g-cover-status').textContent = '已取消待上传的封面，仍使用设备上的封面';
+    } else {
+      clearPreview($('#g-cover'), preview);
+      $('#g-cover-status').textContent = '已取消待上传的封面';
     }
-    const payload = { version: 1, enabled, label, type, content };
-    state.nfc = await api('/api/nfc', { method: 'PUT', body: payload, token: state.token });
-    fillNfcForm();
-    setDirty('nfc', false);
-    toast('NFC 配置已保存');
-  } catch (error) {
-    if (!handleAuthError(error)) toast(error.message, 'error');
+    renderGames();
+    updateSaveBar();
+    return;
+  }
+  if (!game.cover) return;
+  if (!confirm('移除这张游戏封面？设备上的文件会在保存后删除。')) return;
+  game.cover = false;
+  state.imageCache.delete(slot);
+  state.pendingDeletes.add(slot);
+  clearPreview($('#g-cover'), preview);
+  $('#g-cover-status').textContent = '保存后将移除封面';
+  renderGames();
+  updateSaveBar();
+}
+
+/* ------------------------------ game picker ------------------------------ */
+
+function openPicker() {
+  if (!requireEdit()) return;
+  $('#game-picker').classList.remove('hidden');
+  updatePickerTabs();
+  selectPickerSource(steamLookupId() ? 'recent' : 'search');
+}
+
+function closePicker() {
+  $('#game-picker').classList.add('hidden');
+}
+
+function updatePickerTabs() {
+  const id = steamLookupId();
+  $$('.picker-tab').forEach(tab => {
+    if (tab.dataset.source !== 'recent' && tab.dataset.source !== 'most-played') return;
+    tab.disabled = !state.canEdit;
+    tab.title = id ? '' : '请先在“个人资料”中填写 Steam 好友码';
+  });
+}
+
+function selectPickerSource(source) {
+  if (source === 'manual') {
+    closePicker();
+    startNewGame();
+    return;
+  }
+  state.gamePicker.source = source;
+  $$('.picker-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.source === source);
+  });
+  $$('.picker-panel').forEach(panel => panel.classList.add('hidden'));
+  const panel = $(`#picker-${source}`);
+  if (panel) panel.classList.remove('hidden');
+  if (source === 'search') {
+    const input = $('#steam-search');
+    if (input) {
+      input.focus();
+      if (codePoints(input.value.trim()) >= 2) {
+        scheduleSteamSearch();
+      } else {
+        renderSearchResults([]);
+        setSearchStatus('输入游戏名开始搜索');
+      }
+    }
+  } else {
+    loadPlayerList(source);
   }
 }
 
+function startNewGame() {
+  if (!requireEdit()) return;
+  const game = { id: newGameId(), title: '', group: 'favorite', note: '', link: '', cover: false, __new: true };
+  state.games.push(game);
+  setDirty('games', true);
+  renderGames();
+  openEditor(state.games.length - 1);
+  $('#g-title').focus();
+}
+
+function scheduleSteamSearch() {
+  const input = $('#steam-search');
+  if (!input) return;
+  const query = input.value.trim();
+  clearTimeout(state.gamePicker.searchTimer);
+  const generation = ++state.gamePicker.searchGeneration;
+  if (codePoints(query) < 2) {
+    renderSearchResults([]);
+    setSearchStatus(query ? '至少输入 2 个字符' : '输入游戏名开始搜索');
+    return;
+  }
+  state.gamePicker.searchTimer = setTimeout(() => runSteamSearch(query, generation), 450);
+}
+
+async function runSteamSearch(query, generation) {
+  setSearchStatus('搜索中…');
+  try {
+    const data = await gameApi(`/games/search?q=${encodeURIComponent(query)}&limit=10`);
+    if (generation !== state.gamePicker.searchGeneration) return;
+    const games = data.games || [];
+    renderSearchResults(games);
+    setSearchStatus(games.length ? '' : '没有找到匹配游戏');
+  } catch (error) {
+    if (generation !== state.gamePicker.searchGeneration) return;
+    renderSearchResults([]);
+    setSearchStatus(error.message, true);
+  }
+}
+
+function setSearchStatus(text, isError) {
+  const status = $('#search-status');
+  if (!status) return;
+  status.textContent = text || '';
+  status.classList.toggle('error-text', !!isError);
+}
+
+function renderSearchResults(games) {
+  const list = $('#search-results');
+  if (!list) return;
+  list.replaceChildren();
+  games.forEach(game => {
+    const existing = findGameByAppId(game.appId);
+    const button = el('button', 'candidate');
+    button.type = 'button';
+    button.setAttribute('data-mutation', '');
+    button.disabled = !state.canEdit;
+    if (existing) button.classList.add('added');
+    button.addEventListener('click', () => selectSteamCandidate({
+      appId: game.appId,
+      name: game.name,
+      imageUrl: game.image,
+      source: 'search',
+    }));
+    const thumb = el('span', 'candidate-thumb');
+    if (game.image) {
+      const image = document.createElement('img');
+      image.src = game.image;
+      image.alt = '';
+      image.loading = 'lazy';
+      image.referrerPolicy = 'no-referrer';
+      thumb.append(image);
+    } else {
+      thumb.append(el('span', 'placeholder', '无图'));
+    }
+    const main = el('span', 'candidate-main');
+    main.append(el('span', 'candidate-title', game.name || '未命名游戏'));
+    main.append(el('span', 'candidate-meta muted small', existing ? '已在列表中' : 'Steam 搜索结果'));
+    button.append(thumb, main, el('span', 'candidate-action', existing ? '已添加' : '添加'));
+    list.append(button);
+  });
+}
+
+function renderCandidates(kind, games) {
+  const list = $(`#${kind}-results`);
+  if (!list) return;
+  list.replaceChildren();
+  games.forEach(game => {
+    const existing = findGameByAppId(game.appId);
+    const meta = kind === 'recent'
+      ? `最近两周 ${formatPlaytime(game.playtimeTwoWeeksMinutes)} · 总计 ${formatPlaytime(game.playtimeForeverMinutes)} · ${formatPlayedAt(game.lastPlayedAt)}`
+      : `累计 ${formatPlaytime(game.playtimeForeverMinutes)} · 最近 ${formatPlayedAt(game.lastPlayedAt)}`;
+    const button = el('button', 'candidate');
+    button.type = 'button';
+    button.setAttribute('data-mutation', '');
+    button.disabled = !state.canEdit;
+    if (existing) button.classList.add('added');
+    button.addEventListener('click', () => selectSteamCandidate({
+      appId: game.appId,
+      name: game.name,
+      iconUrl: game.icon,
+      source: kind,
+    }));
+    // Recent and most-played lists only get Steam's square game icon, so their
+    // thumbnail keeps a square frame instead of the capsule used by search.
+    const thumb = el('span', 'candidate-thumb square');
+    if (game.icon) {
+      const image = document.createElement('img');
+      image.src = game.icon;
+      image.alt = '';
+      image.loading = 'lazy';
+      image.referrerPolicy = 'no-referrer';
+      thumb.append(image);
+    } else {
+      thumb.append(el('span', 'placeholder', '无图'));
+    }
+    const main = el('span', 'candidate-main');
+    main.append(el('span', 'candidate-title', game.name || '未命名游戏'));
+    main.append(el('span', 'candidate-meta muted small', existing ? `${meta} · 已在列表` : meta));
+    button.append(thumb, main, el('span', 'candidate-action', existing ? '已添加' : '添加'));
+    list.append(button);
+  });
+}
+
+async function loadPlayerList(kind) {
+  const id = steamLookupId();
+  const list = $(`#${kind}-results`);
+  const status = $(`#${kind}-status`);
+  if (!list || !status) return;
+  if (!id) {
+    list.replaceChildren();
+    status.textContent = '请先在“个人资料”中填写 Steam 好友码；好友码可在 Steam 个人资料页复制。';
+    status.classList.add('error-text');
+    return;
+  }
+  const generation = ++state.gamePicker.listGeneration;
+  list.replaceChildren();
+  status.textContent = '正在读取 Steam 游玩记录…';
+  status.classList.remove('error-text');
+  try {
+    const limit = kind === 'recent' ? 20 : 30;
+    const data = await gameApi(`/players/${encodeURIComponent(id)}/${kind}?limit=${limit}`);
+    if (generation !== state.gamePicker.listGeneration) return;
+    const games = data.games || [];
+    renderCandidates(kind, games);
+    if (kind === 'most-played') {
+      const summary = $('#most-played-summary');
+      if (summary) {
+        summary.textContent = `共 ${data.ownedGameCount || 0} 款游戏 · 累计 ${formatPlaytime(data.totalPlaytimeMinutes)}`;
+      }
+    }
+    status.textContent = games.length ? '' : '暂无记录或玩家资料未公开';
+    status.classList.remove('error-text');
+  } catch (error) {
+    if (generation !== state.gamePicker.listGeneration) return;
+    status.textContent = error.message;
+    status.classList.add('error-text');
+  }
+}
+
+async function selectSteamCandidate(candidate) {
+  if (!requireEdit()) return;
+  const existing = findGameByAppId(candidate.appId);
+  if (existing) {
+    toast('这款游戏已经在列表里了');
+    openEditor(state.games.indexOf(existing));
+    closePicker();
+    return;
+  }
+  const status = $(`#${state.gamePicker.source}-status`);
+  if (status) {
+    status.textContent = '正在读取游戏资料…';
+    status.classList.remove('error-text');
+  }
+  let detail = null;
+  let warning = '';
+  try {
+    detail = await fetchGameDetail(candidate.appId);
+  } catch (error) {
+    warning = error.code === 'CHINESE_DATA_UNAVAILABLE'
+      ? '该游戏暂无官方简体中文资料，已使用原名'
+      : '未能读取游戏详情，已使用候选名称';
+  }
+  let title = (detail && detail.name) || candidate.name || '未命名游戏';
+  if (codePoints(title) > GAME_MAX_TITLE) {
+    title = clipCodePoints(title, GAME_MAX_TITLE);
+    warning = warning || '游戏名称超过 40 个字，已截断';
+  }
+  const link = (detail && detail.sourceUrl) || `https://store.steampowered.com/app/${candidate.appId}/`;
+  // The detail cover is Steam's 460 x 215 header art. Search results fall back
+  // to the capsule only when the detail request failed.
+  const coverUrl = (detail && detail.cover) || candidate.imageUrl || '';
+  const gameNote = detail && detail.description
+    ? clipCodePoints(htmlToPlainText(detail.description), 120)
+    : '';
+  const game = {
+    id: newGameId(),
+    title,
+    group: candidate.source === 'recent' ? 'playing' : 'favorite',
+    note: gameNote,
+    link,
+    cover: false,
+    __new: true,
+    __appId: candidate.appId,
+  };
+  state.games.push(game);
+  setDirty('games', true);
+  renderGames();
+  closePicker();
+  openEditor(state.games.length - 1);
+  if (warning) toast(warning, 'warn');
+  if (coverUrl) {
+    $('#g-cover-status').textContent = '正在获取封面…';
+    try {
+      const bitmap = await fetchImageBitmap(coverUrl);
+      const processed = await processBitmap(bitmap, 'cover');
+      // The editor may have been cancelled while the cover was downloading.
+      if (!state.games.includes(game)) return;
+      setPendingImage(`games/${game.id}`, processed.bytes);
+      drawCanvasInto($('#g-cover'), processed.canvas);
+      markPreview($('#g-cover').closest('.preview'), true);
+      $('#g-cover-status').textContent = '已生成预览，点击底部“保存更改”写入设备';
+      renderGames();
+    } catch (error) {
+      $('#g-cover-status').textContent = '封面获取失败，可在编辑器中手动选择';
+    }
+  }
+  toast('已加入列表，点击底部“保存更改”写入设备');
+}
 
 /* -------------------------------- backup --------------------------------- */
 
@@ -1375,12 +1782,12 @@ async function fetchFreshImage(slot) {
 }
 
 async function exportBackup() {
+  if (hasUnsavedChanges() && !confirm('本地有未保存的更改，导出的是设备上已保存的数据。继续导出吗？')) return;
   const status = $('#export-status');
   status.textContent = '正在读取资料…';
   try {
     const profile = await api('/api/profile');
     const games = await api('/api/games');
-    const nfc = await api('/api/nfc');
     const slots = [];
     for (const slot of FIXED_IMAGE_SLOTS) {
       if (profile.images && profile.images[SLOT_FLAGS[slot]]) slots.push(slot);
@@ -1399,7 +1806,6 @@ async function exportBackup() {
       exported_at: new Date().toISOString(),
       profile,
       games,
-      nfc,
       images,
     };
     downloadBackup(backup);
@@ -1456,8 +1862,8 @@ function validateBackup(backup) {
   if (backup.format !== BACKUP_FORMAT || backup.version !== BACKUP_VERSION) {
     throw new Error('不是受支持的 Player Pass 备份文件');
   }
-  if (!backup.profile || !backup.games || !Array.isArray(backup.games.games) || !backup.nfc) {
-    throw new Error('备份缺少个人资料、游戏或 NFC 数据');
+  if (!backup.profile || !backup.games || !Array.isArray(backup.games.games)) {
+    throw new Error('备份缺少个人资料或游戏数据');
   }
   if (!backup.images || typeof backup.images !== 'object') {
     throw new Error('备份缺少图片数据');
@@ -1471,8 +1877,31 @@ function validateBackup(backup) {
   }
 }
 
+function ppimDimensions(bytes) {
+  if (bytes.length < 20) return null;
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x50 || bytes[2] !== 0x49 || bytes[3] !== 0x4d) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: view.getUint16(8, true), height: view.getUint16(10, true) };
+}
+
+function slotAcceptsBytes(slot, bytes) {
+  const dims = ppimDimensions(bytes);
+  if (!dims) return false;
+  if (slot === 'avatar') {
+    return dims.width === SPECS.avatar.width && dims.height === SPECS.avatar.height;
+  }
+  if (slot.startsWith('games/')) {
+    return dims.width === SPECS.cover.width && dims.height === SPECS.cover.height;
+  }
+  return false;
+}
+
 async function uploadBackupImage(slot, base64) {
   const bytes = base64ToBytes(base64);
+  // Older backups can carry game covers in the previous 72 x 108 format. The
+  // device rejects those dimensions, so skip them instead of failing the
+  // whole import; the rest of the backup still applies.
+  if (!slotAcceptsBytes(slot, bytes)) return;
   const response = await fetch(`/api/images/${slot}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/octet-stream', 'X-PP-Token': state.token },
@@ -1509,7 +1938,7 @@ async function importBackup() {
     toast('备份文件超过 16 MB', 'error');
     return;
   }
-  if (!confirm('导入会覆盖当前个人资料、游戏、NFC 与相关图片，且不提供自动回滚。建议先导出当前数据。继续吗？')) return;
+  if (!confirm('导入会覆盖设备上的个人资料、游戏与相关图片，本地未保存的更改也会被丢弃，且不提供自动回滚。建议先导出当前数据。继续吗？')) return;
 
   try {
     status.textContent = '正在读取备份…';
@@ -1523,8 +1952,6 @@ async function importBackup() {
       { label: 'Steam ID', text: profile.platforms.steam.id },
       { label: 'Switch ID', text: profile.platforms.switch.id },
       { label: 'PlayStation ID', text: profile.platforms.playstation.id },
-      { label: 'NFC 名称', text: backup.nfc.label },
-      { label: 'NFC 内容', text: backup.nfc.content },
     ];
     profile.contacts.forEach((contact, index) => {
       textEntries.push({ label: `联系方式${index + 1}平台`, text: contact.platform });
@@ -1557,8 +1984,6 @@ async function importBackup() {
       },
       token: state.token,
     });
-    status.textContent = '正在写入 NFC 配置…';
-    await api('/api/nfc', { method: 'PUT', body: backup.nfc, token: state.token });
 
     let done = 0;
     const images = backup.images;
@@ -1596,18 +2021,292 @@ async function loadProfile() {
     fillProfileForm();
     renderContacts();
     loadInitialImages();
-    state.loaded = true;
+    state.loaded.profile = true;
+    updateSaveBar();
+    return true;
   } catch (error) {
     showError(error.message);
+    return false;
   }
+}
+
+async function loadMissingDocuments() {
+  const jobs = [];
+  if (!state.loaded.profile) jobs.push(loadProfile());
+  if (!state.loaded.games) jobs.push(loadGames());
+  if (jobs.length) await Promise.all(jobs);
 }
 
 async function reloadAll() {
   state.imageCache.clear();
-  await Promise.all([loadProfile(), loadGames(), loadNfc()]);
-  setDirty('profile', false);
-  setDirty('games', false);
-  setDirty('nfc', false);
+  state.pending.clear();
+  state.pendingDeletes.clear();
+  state.editor.index = -1;
+  state.editor.isNew = false;
+  $('#game-editor').classList.add('hidden');
+  const [profileOk, gamesOk] = await Promise.all([loadProfile(), loadGames()]);
+  if (profileOk) setDirty('profile', false);
+  if (gamesOk) setDirty('games', false);
+  updateSaveBar();
+  return profileOk && gamesOk;
+}
+
+async function reloadDevice() {
+  if (state.saving) return;
+  const message = hasUnsavedChanges()
+    ? '将丢弃本地未保存的更改，并从设备重新读取数据。继续吗？'
+    : '从设备重新读取数据？';
+  if (!confirm(message)) return;
+  const ok = await reloadAll();
+  toast(ok ? '已从设备重新加载' : '重新加载失败，请检查设备连接', ok ? 'ok' : 'error');
+}
+
+/* ------------------------------- whole save ------------------------------ */
+
+function bytesToBuffer(bytes) {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+// Saves profile, games, and every pending image in one user action.  Each
+// part reports its own outcome: a failed part keeps its dirty flag and pending
+// image, so a later save only retries what is still missing.
+async function saveAll() {
+  if (state.saving) return;
+  if (!requireEdit()) return;
+  const editorError = commitEditorFields();
+  if (editorError) {
+    toast(editorError, 'error');
+    return;
+  }
+  if (!hasUnsavedChanges()) return;
+
+  // Only sections with local changes are validated and written, so an
+  // untouched (possibly empty) section can never block the save.
+  const plan = {
+    profile: state.dirty.profile,
+    games: state.dirty.games,
+  };
+  if (plan.profile && !state.profile) {
+    toast('个人资料尚未加载，请刷新页面', 'error');
+    return;
+  }
+
+  let profileBody = null;
+  if (plan.profile) {
+    profileBody = profilePayload();
+    const profileError = validateProfileClient(profileBody);
+    if (profileError) {
+      toast(profileError, 'error');
+      return;
+    }
+  }
+
+  let gamesBody = null;
+  if (plan.games) {
+    gamesBody = {
+      version: 1,
+      games: state.games.map(game => ({
+        id: game.id,
+        title: game.title,
+        group: game.group,
+        note: game.note || '',
+        link: game.link || '',
+      })),
+    };
+    const gamesError = validateGamesClient(gamesBody.games);
+    if (gamesError) {
+      toast(gamesError, 'error');
+      return;
+    }
+  }
+
+  const entries = [];
+  if (profileBody) {
+    entries.push(
+      { label: '姓名', text: profileBody.name },
+      { label: '个人介绍', text: profileBody.tagline },
+      { label: 'Steam ID', text: profileBody.platforms.steam.id },
+      { label: 'Switch ID', text: profileBody.platforms.switch.id },
+      { label: 'PlayStation ID', text: profileBody.platforms.playstation.id }
+    );
+    filledContacts().forEach(contact => {
+      const number = contact.index + 1;
+      entries.push({ label: `联系方式${number}平台`, text: contact.platform });
+      entries.push({ label: `联系方式${number}账号`, text: contact.account });
+      entries.push({ label: `联系方式${number}链接`, text: contact.link });
+    });
+  }
+  if (gamesBody) {
+    gamesBody.games.forEach(game => {
+      entries.push({ label: `游戏名称「${game.title}」`, text: game.title });
+      entries.push({ label: `游戏介绍「${game.title}」`, text: game.note });
+      entries.push({ label: `通用链接「${game.title}」`, text: game.link });
+    });
+  }
+
+  if (entries.length) {
+    try {
+      const bad = await validateTexts(entries);
+      if (bad.length) {
+        toast(bad[0], 'error');
+        return;
+      }
+    } catch (error) {
+      if (!handleAuthError(error)) toast(`保存前校验失败：${error.message}`, 'error');
+      return;
+    }
+  }
+
+  const revisions = { ...state.revision };
+  const appIds = new Map(
+    state.games.filter(game => game.__appId).map(game => [game.id, game.__appId])
+  );
+  // Covers may only be written for games that exist on the device after this
+  // save; a game added while saving stays pending for the next save.
+  const deviceGameIds = new Set(
+    plan.games ? gamesBody.games.map(game => game.id) : state.games.map(game => game.id)
+  );
+  const failures = [];
+  let savedSomething = false;
+  let gamesSaved = !plan.games;
+  let aborted = false;
+
+  const fail = (label, error) => {
+    failures.push(`${label}：${error.message}`);
+    if (handleAuthError(error) || error.status === 0) aborted = true;
+  };
+
+  state.saving = true;
+  updateSaveBar();
+
+  try {
+    if (!aborted && plan.profile) {
+      try {
+        const reply = await api('/api/profile', { method: 'PUT', body: profileBody, token: state.token });
+        savedSomething = true;
+        if (state.revision.profile === revisions.profile) {
+          const images = state.profile.images || {};
+          state.profile = reply || profileBody;
+          if (!state.profile.images) state.profile.images = images;
+          if (!Array.isArray(state.profile.contacts)) state.profile.contacts = [];
+          fillProfileForm();
+          renderContacts();
+          updatePickerTabs();
+          setDirty('profile', false);
+        }
+      } catch (error) {
+        fail('个人资料', error);
+      }
+    }
+
+    if (!aborted && plan.games) {
+      try {
+        const reply = await api('/api/games', { method: 'PUT', body: gamesBody, token: state.token });
+        savedSomething = true;
+        gamesSaved = true;
+        if (state.revision.games === revisions.games) {
+          state.games = (reply.games || []).map(game => ({ ...game, __appId: appIds.get(game.id) }));
+          setDirty('games', false);
+          renderGames();
+        }
+      } catch (error) {
+        fail('游戏列表', error);
+      }
+    }
+
+    if (!aborted) {
+      const avatarBytes = state.pending.get('avatar');
+      if (avatarBytes) {
+        try {
+          await putImageBytes('avatar', avatarBytes);
+          if (state.pending.get('avatar') === avatarBytes) state.pending.delete('avatar');
+          state.imageCache.set('avatar', bytesToBuffer(avatarBytes));
+          if (state.profile && state.profile.images) state.profile.images.avatar = true;
+          setImageCardStatus('avatar', '已保存到设备', false);
+          savedSomething = true;
+        } catch (error) {
+          fail('头像', error);
+          setImageCardStatus('avatar', '保存失败，可重试', true);
+        }
+      }
+    }
+
+    if (!aborted && state.pendingDeletes.has('avatar')) {
+      try {
+        await api('/api/images/avatar', { method: 'DELETE', token: state.token });
+        state.pendingDeletes.delete('avatar');
+        state.imageCache.delete('avatar');
+        if (state.profile && state.profile.images) state.profile.images.avatar = false;
+        setImageCardStatus('avatar', '已从设备移除', false);
+        savedSomething = true;
+      } catch (error) {
+        if (error.status === 404) {
+          state.pendingDeletes.delete('avatar');
+          state.imageCache.delete('avatar');
+          if (state.profile && state.profile.images) state.profile.images.avatar = false;
+          setImageCardStatus('avatar', '已从设备移除', false);
+        } else {
+          fail('头像', error);
+          setImageCardStatus('avatar', '保存失败，可重试', true);
+        }
+      }
+    }
+
+    if (!aborted && gamesSaved) {
+      for (const [slot, bytes] of Array.from(state.pending.entries())) {
+        if (aborted || !slot.startsWith('games/')) continue;
+        const id = slot.slice('games/'.length);
+        if (!deviceGameIds.has(id) || state.pending.get(slot) !== bytes) continue;
+        const game = state.games.find(item => item.id === id);
+        if (!game) {
+          state.pending.delete(slot);
+          continue;
+        }
+        try {
+          await putImageBytes(slot, bytes);
+          if (state.pending.get(slot) === bytes) state.pending.delete(slot);
+          state.imageCache.set(slot, bytesToBuffer(bytes));
+          game.cover = true;
+          savedSomething = true;
+        } catch (error) {
+          fail(`「${game.title}」封面`, error);
+        }
+      }
+      for (const slot of Array.from(state.pendingDeletes)) {
+        if (aborted || !slot.startsWith('games/')) continue;
+        const id = slot.slice('games/'.length);
+        if (!deviceGameIds.has(id)) {
+          state.pendingDeletes.delete(slot);
+          continue;
+        }
+        try {
+          await api(`/api/images/${slot}`, { method: 'DELETE', token: state.token });
+          state.pendingDeletes.delete(slot);
+          state.imageCache.delete(slot);
+          savedSomething = true;
+        } catch (error) {
+          if (error.status === 404) {
+            state.pendingDeletes.delete(slot);
+            state.imageCache.delete(slot);
+          } else {
+            fail('游戏封面', error);
+          }
+        }
+      }
+    }
+  } finally {
+    state.saving = false;
+    renderGames();
+    updateSaveBar();
+    pollStatus();
+  }
+
+  if (failures.length) {
+    const detail = failures.length > 1 ? `${failures[0]}（共 ${failures.length} 项失败）` : failures[0];
+    toast(`部分保存失败：${detail}`, 'error');
+  } else if (savedSomething) {
+    toast('更改已保存到设备');
+  }
 }
 
 /* -------------------------------- events --------------------------------- */
@@ -1633,38 +2332,30 @@ function setupForms() {
 
   $('#profile-form').addEventListener('submit', event => {
     event.preventDefault();
-    saveProfile();
+    saveAll();
   });
   $('#add-contact').addEventListener('click', addContact);
-  $('#save-contacts').addEventListener('click', saveProfile);
-  $('#nfc-form').addEventListener('submit', event => {
-    event.preventDefault();
-    saveNfc();
-  });
-  ['#n-enabled', '#n-label', '#n-type', '#n-content'].forEach(selector => {
-    $(selector).addEventListener('input', () => {
-      updateCounter($('#n-label'));
-      updateCounter($('#n-content'));
-      setDirty('nfc', true);
-    });
-    $(selector).addEventListener('change', () => {
-      updateCounter($('#n-label'));
-      updateCounter($('#n-content'));
-      setDirty('nfc', true);
-    });
-  });
 
-  $('#add-game').addEventListener('click', () => {
-    if (!requireEdit()) return;
-    const game = { id: newGameId(), title: '', group: 'favorite', note: '', link: '', cover: false, __new: true };
-    state.games.push(game);
-    setDirty('games', true);
-    renderGames();
-    openEditor(state.games.length - 1);
-    $('#g-title').focus();
+  $('#add-game').addEventListener('click', openPicker);
+  $('#picker-close').addEventListener('click', closePicker);
+  $$('.picker-tab').forEach(tab => {
+    tab.addEventListener('click', () => selectPickerSource(tab.dataset.source));
   });
-  $('#save-games').addEventListener('click', saveGames);
+  $('#steam-search').addEventListener('input', scheduleSteamSearch);
+  $('#p-steam').addEventListener('input', updatePickerTabs);
+  $('#steam-search').addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const query = $('#steam-search').value.trim();
+    if (codePoints(query) < 2) return;
+    clearTimeout(state.gamePicker.searchTimer);
+    const generation = ++state.gamePicker.searchGeneration;
+    runSteamSearch(query, generation);
+  });
   $('#game-editor-save').addEventListener('click', saveEditorToList);
+  $('#game-editor-up').addEventListener('click', () => moveEditorGame(-1));
+  $('#game-editor-down').addEventListener('click', () => moveEditorGame(1));
+  $('#game-editor-delete').addEventListener('click', deleteEditorGame);
   $('#game-editor-close').addEventListener('click', () => closeEditor(true));
   $('#game-editor-cancel').addEventListener('click', () => closeEditor(true));
   $('#g-title').addEventListener('input', () => updateCounter($('#g-title')));
@@ -1678,18 +2369,20 @@ function setupForms() {
     if (!file) return;
     try {
       const processed = await processImage(file, 'cover');
-      state.pending.set(`games/${game.id}`, processed.bytes);
+      setPendingImage(`games/${game.id}`, processed.bytes);
       drawCanvasInto($('#g-cover'), processed.canvas);
       markPreview($('#g-cover').closest('.preview'), true);
-      $('#g-cover-status').textContent = '已生成预览，点击“上传封面”保存';
+      $('#g-cover-status').textContent = '已生成预览，点击底部“保存更改”写入设备';
     } catch (error) {
       coverInput.value = '';
       $('#g-cover-status').textContent = error.message;
       toast(error.message, 'error');
     }
   });
-  $('#g-cover-upload').addEventListener('click', uploadGameCover);
   $('#g-cover-remove').addEventListener('click', removeGameCover);
+
+  $('#save-all').addEventListener('click', saveAll);
+  $('#reload-device').addEventListener('click', reloadDevice);
 
   $('#export-backup').addEventListener('click', exportBackup);
   $('#import-backup').addEventListener('click', importBackup);
@@ -1703,7 +2396,7 @@ function setupForms() {
   });
 
   window.addEventListener('beforeunload', event => {
-    if (!anyDirty()) return;
+    if (!hasUnsavedChanges()) return;
     event.preventDefault();
     event.returnValue = '';
   });
@@ -1735,8 +2428,12 @@ async function init() {
   setupForms();
   setReadOnly(true);
   await claim();
-  await Promise.all([loadProfile(), loadGames(), loadNfc(), pollStatus()]);
+  const loads = [pollStatus()];
+  if (!state.loaded.profile) loads.push(loadProfile());
+  if (!state.loaded.games) loads.push(loadGames());
+  await Promise.all(loads);
   setReadOnly(!state.canEdit);
+  updateSaveBar();
   if (state.token) startHeartbeat();
   state.statusTimer = setInterval(pollStatus, 5000);
 }

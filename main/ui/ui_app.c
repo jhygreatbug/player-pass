@@ -18,32 +18,24 @@ typedef enum {
     PAGE_BOOT,
     PAGE_HOME,
     PAGE_GAMES,
-    PAGE_DETAIL,
     PAGE_CONTACT,
-    PAGE_NFC,
     PAGE_OVERLAY,
     PAGE_MANAGE,
     PAGE_ERROR,
 } page_t;
 
-typedef enum {
-    ENTRY_HEADER = 0,
-    ENTRY_GAME,
-    ENTRY_EMPTY,
-} entry_kind_t;
-
 #define HOME_PLATFORMS 3
-#define HOME_NAV 3
+#define HOME_NAV 2
 #define HOME_ITEMS HOME_NAV
 
-#define GAME_WINDOW_ENTRIES 5
+// One column of full-width cards: the selected card sits at the top and the
+// next card peeks in below (the 232 px list area clips it). Each card is the
+// 216 x 101 cover plus a 31 px title strip.
+#define GAME_WINDOW_ENTRIES 2
 #define GAME_COVER_SLOTS GAME_WINDOW_ENTRIES
-
-typedef struct {
-    entry_kind_t kind;
-    pp_game_group_t group;
-    size_t game_index;
-} game_entry_t;
+#define GAME_CARD_W 216
+#define GAME_CARD_H 132
+#define GAME_CARD_GAP 8
 
 typedef struct {
     bool used;
@@ -56,7 +48,6 @@ static const pp_storage_t *s_storage;
 static const pp_profile_t *s_profile;
 static const pp_profile_images_t *s_images;
 static const pp_games_t *s_games;
-static const pp_nfc_t *s_nfc;
 static int s_battery_soc = -1;
 
 static page_t s_page = PAGE_NONE;
@@ -65,9 +56,7 @@ static pp_topbar_t *s_active_bar;
 
 static pp_topbar_t s_home_bar;
 static pp_topbar_t s_games_bar;
-static pp_topbar_t s_detail_bar;
 static pp_topbar_t s_contact_bar;
-static pp_topbar_t s_nfc_bar;
 static pp_topbar_t s_overlay_bar;
 static pp_topbar_t s_manage_bar;
 static pp_topbar_t s_error_bar;
@@ -87,7 +76,6 @@ static void set_current(lv_obj_t *screen, page_t page, pp_topbar_t *bar)
 
 static void free_home_avatar(void);
 static void free_game_covers(void);
-static void free_detail_cover(void);
 static void free_overlay_images(void);
 static void free_manage_qr(void);
 
@@ -109,7 +97,6 @@ static void destroy_all_pages(void)
     s_overlay_return_bar = NULL;
     free_home_avatar();
     free_game_covers();
-    free_detail_cover();
     free_overlay_images();
     free_manage_qr();
     s_page = PAGE_NONE;
@@ -154,10 +141,10 @@ static const char *const PLATFORM_NAMES[HOME_PLATFORMS] = {
     "Steam", "Switch", "PSN",
 };
 static const pp_icon_id_t NAV_ICONS[HOME_NAV] = {
-    PP_ICON_CARTRIDGE, PP_ICON_CHAT, PP_ICON_TAG,
+    PP_ICON_CARTRIDGE, PP_ICON_CHAT,
 };
 static const char *const NAV_NAMES[HOME_NAV] = {
-    "游戏收藏", "联系方式", "NFC 名片",
+    "游戏收藏", "联系方式",
 };
 
 static const char *platform_id(int index)
@@ -438,19 +425,14 @@ static void show_notice(const char *title, const char *body)
 /* Games                                                                     */
 /* ------------------------------------------------------------------------- */
 
-static game_entry_t s_entries[PP_GAMES_SAFETY_LIMIT + 4];
-static size_t s_entry_count;
 static size_t s_game_sel;
-static size_t s_window_start;
 static lv_obj_t *s_games_container;
 static lv_obj_t *s_games_count;
 static lv_obj_t *s_games_more_top;
 static lv_obj_t *s_games_more_bottom;
 static lv_obj_t *s_window_panels[GAME_WINDOW_ENTRIES];
 static lv_obj_t *s_window_titles[GAME_WINDOW_ENTRIES];
-static lv_obj_t *s_window_notes[GAME_WINDOW_ENTRIES];
 static lv_obj_t *s_window_frames[GAME_WINDOW_ENTRIES];
-static entry_kind_t s_window_kind[GAME_WINDOW_ENTRIES];
 static size_t s_window_game_index[GAME_WINDOW_ENTRIES];
 static cover_slot_t s_covers[GAME_COVER_SLOTS];
 
@@ -462,80 +444,6 @@ static void free_game_covers(void)
         }
         memset(&s_covers[i], 0, sizeof(s_covers[i]));
     }
-}
-
-static void build_game_entries(void)
-{
-    s_entry_count = 0;
-    s_entries[s_entry_count++] = (game_entry_t){
-        .kind = ENTRY_HEADER, .group = PP_GAME_GROUP_FAVORITE,
-    };
-    size_t favorites = 0;
-    if (s_games) {
-        for (size_t i = 0; i < s_games->count; ++i) {
-            if (s_games->items[i].group != PP_GAME_GROUP_FAVORITE) continue;
-            s_entries[s_entry_count++] = (game_entry_t){
-                .kind = ENTRY_GAME,
-                .group = PP_GAME_GROUP_FAVORITE,
-                .game_index = i,
-            };
-            ++favorites;
-        }
-    }
-    if (favorites == 0) {
-        s_entries[s_entry_count++] = (game_entry_t){
-            .kind = ENTRY_EMPTY, .group = PP_GAME_GROUP_FAVORITE,
-        };
-    }
-
-    s_entries[s_entry_count++] = (game_entry_t){
-        .kind = ENTRY_HEADER, .group = PP_GAME_GROUP_PLAYING,
-    };
-    size_t playing = 0;
-    if (s_games) {
-        for (size_t i = 0; i < s_games->count; ++i) {
-            if (s_games->items[i].group != PP_GAME_GROUP_PLAYING) continue;
-            s_entries[s_entry_count++] = (game_entry_t){
-                .kind = ENTRY_GAME,
-                .group = PP_GAME_GROUP_PLAYING,
-                .game_index = i,
-            };
-            ++playing;
-        }
-    }
-    if (playing == 0) {
-        s_entries[s_entry_count++] = (game_entry_t){
-            .kind = ENTRY_EMPTY, .group = PP_GAME_GROUP_PLAYING,
-        };
-    }
-}
-
-static size_t selected_entry_index(void)
-{
-    if (!s_games || s_games->count == 0) return 0;
-    for (size_t i = 0; i < s_entry_count; ++i) {
-        if (s_entries[i].kind == ENTRY_GAME &&
-            s_entries[i].game_index == s_game_sel) {
-            return i;
-        }
-    }
-    return 0;
-}
-
-static void window_follow_selection(void)
-{
-    if (s_entry_count <= GAME_WINDOW_ENTRIES) {
-        s_window_start = 0;
-        return;
-    }
-    const size_t selected = selected_entry_index();
-    if (selected < s_window_start) {
-        s_window_start = selected;
-    } else if (selected >= s_window_start + GAME_WINDOW_ENTRIES) {
-        s_window_start = selected - GAME_WINDOW_ENTRIES + 1;
-    }
-    const size_t max_start = s_entry_count - GAME_WINDOW_ENTRIES;
-    if (s_window_start > max_start) s_window_start = max_start;
 }
 
 static cover_slot_t *cover_find(size_t game_index)
@@ -614,17 +522,15 @@ static void games_refresh_selection(void)
         lv_label_set_text(s_games_count, text);
     }
     for (int i = 0; i < GAME_WINDOW_ENTRIES; ++i) {
-        if (!s_window_panels[i] || s_window_kind[i] != ENTRY_GAME) continue;
+        if (!s_window_panels[i]) continue;
         const bool selected = s_window_game_index[i] == s_game_sel;
-        pp_row_style(s_window_panels[i], selected);
+        lv_obj_set_style_bg_color(
+            s_window_panels[i],
+            lv_color_hex(selected ? PP_COLOR_PANEL_ALT : PP_COLOR_PANEL), 0);
         pp_row_text_color(s_window_titles[i], selected);
-        lv_obj_set_style_text_color(
-            s_window_notes[i],
-            lv_color_hex(selected ? PP_COLOR_MUTED : PP_COLOR_DIM), 0);
         if (s_window_frames[i]) {
-            lv_obj_set_style_border_color(
-                s_window_frames[i],
-                lv_color_hex(selected ? PP_COLOR_MINT : PP_COLOR_BORDER), 0);
+            lv_obj_set_style_border_width(s_window_frames[i], selected ? 2 : 0,
+                                          0);
         }
     }
 }
@@ -638,20 +544,18 @@ static void games_render_window(void)
     for (int i = 0; i < GAME_WINDOW_ENTRIES; ++i) {
         s_window_panels[i] = NULL;
         s_window_titles[i] = NULL;
-        s_window_notes[i] = NULL;
         s_window_frames[i] = NULL;
-        s_window_kind[i] = ENTRY_EMPTY;
         s_window_game_index[i] = SIZE_MAX;
     }
 
+    const size_t count = s_games ? s_games->count : 0;
+    if (count > 0 && s_game_sel >= count) s_game_sel = count - 1;
     size_t needed[GAME_WINDOW_ENTRIES];
     size_t needed_count = 0;
-    const size_t end = s_window_start + GAME_WINDOW_ENTRIES < s_entry_count
-                           ? s_window_start + GAME_WINDOW_ENTRIES
-                           : s_entry_count;
-    for (size_t i = s_window_start; i < end; ++i) {
-        if (s_entries[i].kind != ENTRY_GAME) continue;
-        needed[needed_count++] = s_entries[i].game_index;
+    for (size_t slot = 0; slot < GAME_WINDOW_ENTRIES; ++slot) {
+        const size_t index = s_game_sel + slot;
+        if (index >= count) break;
+        needed[needed_count++] = index;
     }
     covers_prepare(needed, needed_count);
 
@@ -663,83 +567,61 @@ static void games_render_window(void)
     lv_obj_set_style_pad_all(s_games_container, 0, 0);
     lv_obj_set_style_radius(s_games_container, 0, 0);
     lv_obj_remove_flag(s_games_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_games_container, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
-    int y = 0;
-    int slot = 0;
-    for (size_t i = s_window_start; i < end && slot < GAME_WINDOW_ENTRIES;
-         ++i, ++slot) {
-        const game_entry_t *entry = &s_entries[i];
-        s_window_kind[slot] = entry->kind;
-        if (entry->kind == ENTRY_HEADER) {
-            lv_obj_t *accent = lv_obj_create(s_games_container);
-            lv_obj_set_pos(accent, 0, y + 4);
-            lv_obj_set_size(accent, 3, 14);
-            lv_obj_set_style_bg_color(accent, lv_color_hex(PP_COLOR_MINT), 0);
-            lv_obj_set_style_bg_opa(accent, LV_OPA_COVER, 0);
-            lv_obj_set_style_border_width(accent, 0, 0);
-            lv_obj_set_style_radius(accent, 0, 0);
-            lv_obj_set_style_pad_all(accent, 0, 0);
-            lv_obj_remove_flag(accent, LV_OBJ_FLAG_SCROLLABLE);
+    if (count == 0) {
+        pp_label_create(s_games_container, "暂无游戏", &pp_font_12, PP_COLOR_DIM,
+                        84, 104, 100);
+    }
 
-            pp_icon_create(s_games_container,
-                           entry->group == PP_GAME_GROUP_FAVORITE
-                               ? PP_ICON_HEART
-                               : PP_ICON_PLAY,
-                           PP_COLOR_MINT, 8, y + 3);
-            const char *title = entry->group == PP_GAME_GROUP_FAVORITE
-                                    ? "喜欢的游戏"
-                                    : "正在玩的游戏";
-            pp_label_create(s_games_container, title, &pp_font_12,
-                            PP_COLOR_MUTED, 28, y + 2, 160);
-            y += 22;
-            continue;
-        }
-        if (entry->kind == ENTRY_EMPTY) {
-            pp_label_create(s_games_container, "暂无游戏", &pp_font_12,
-                            PP_COLOR_DIM, 28, y + 3, 160);
-            y += 22;
-            continue;
-        }
-
-        const size_t game_index = entry->game_index;
-        const pp_game_t *game =
-            s_games && game_index < s_games->count ? &s_games->items[game_index]
-                                                   : NULL;
-        if (!game) continue;
+    for (size_t slot = 0; slot < GAME_WINDOW_ENTRIES; ++slot) {
+        const size_t game_index = s_game_sel + slot;
+        if (game_index >= count) break;
+        const pp_game_t *game = &s_games->items[game_index];
         s_window_game_index[slot] = game_index;
-        lv_obj_t *panel = pp_panel_create(s_games_container, 0, y, 216, 46);
-        s_window_panels[slot] = panel;
 
-        lv_obj_t *frame = pp_panel_create(panel, 4, 1, 30, 44);
-        s_window_frames[slot] = frame;
+        lv_obj_t *card = pp_panel_create(
+            s_games_container, 0, (int)slot * (GAME_CARD_H + GAME_CARD_GAP),
+            GAME_CARD_W, GAME_CARD_H);
+        // The cover fills the card edge to edge; selection is drawn as an
+        // overlay frame so the stored image is never inset or scaled.
+        lv_obj_set_style_border_width(card, 0, 0);
+        s_window_panels[slot] = card;
+
         pp_loaded_image_t *cover = cover_image(game_index);
         if (cover) {
-            pp_image_widget_create(frame, cover, 1, 1, 28, 42);
+            pp_image_widget_create(card, cover, 0, 0, PP_IMAGE_COVER_W,
+                                   PP_IMAGE_COVER_H);
         } else {
-            pp_icon_create(frame, PP_ICON_IMAGE, PP_COLOR_DIM, 8, 15);
+            pp_icon_create(card, PP_ICON_IMAGE, PP_COLOR_DIM, 101, 43);
         }
-
-        s_window_titles[slot] = dyn_label(panel, &pp_font_12, PP_COLOR_TEXT,
-                                          42, 3, 150, 16,
-                                          game->title[0] ? game->title
-                                                         : "未命名游戏");
+        lv_obj_t *group_icon = pp_icon_create(
+            card,
+            game->group == PP_GAME_GROUP_FAVORITE ? PP_ICON_HEART : PP_ICON_PLAY,
+            PP_COLOR_MUTED, 6, 112);
+        if (group_icon) lv_obj_set_size(group_icon, 8, 8);
+        s_window_titles[slot] = dyn_label(
+            card, &pp_font_12, PP_COLOR_TEXT, 18, 108, 192, 16,
+            game->title[0] ? game->title : "未命名游戏");
         if (s_window_titles[slot]) {
             lv_label_set_long_mode(s_window_titles[slot],
                                    LV_LABEL_LONG_MODE_DOTS);
         }
-        s_window_notes[slot] = dyn_label(
-            panel, &pp_font_12, PP_COLOR_DIM, 42, 22, 150, 16,
-            game->note[0] ? game->note : "—");
-        if (s_window_notes[slot]) {
-            lv_label_set_long_mode(s_window_notes[slot],
-                                   LV_LABEL_LONG_MODE_DOTS);
-        }
-        pp_icon_create(panel, PP_ICON_CHEVRON, PP_COLOR_DIM, 198, 17);
-        y += 46;
+
+        lv_obj_t *frame = lv_obj_create(card);
+        lv_obj_set_pos(frame, 0, 0);
+        lv_obj_set_size(frame, GAME_CARD_W, GAME_CARD_H);
+        lv_obj_set_style_bg_opa(frame, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(frame, 0, 0);
+        lv_obj_set_style_border_color(frame, lv_color_hex(PP_COLOR_MINT), 0);
+        lv_obj_set_style_radius(frame, 0, 0);
+        lv_obj_set_style_pad_all(frame, 0, 0);
+        lv_obj_remove_flag(frame, LV_OBJ_FLAG_SCROLLABLE);
+        s_window_frames[slot] = frame;
     }
 
-    const bool more_top = s_window_start > 0;
-    const bool more_bottom = s_window_start + GAME_WINDOW_ENTRIES < s_entry_count;
+    const bool more_top = s_game_sel > 0;
+    const bool more_bottom = s_game_sel + 1 < count;
     if (s_games_more_top) {
         lv_obj_set_style_bg_opa(s_games_more_top,
                                 more_top ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
@@ -757,9 +639,6 @@ static void build_games(void)
     if (s_games && s_games->count > 0 && s_game_sel >= s_games->count) {
         s_game_sel = s_games->count - 1;
     }
-    build_game_entries();
-    s_window_start = 0;
-    window_follow_selection();
 
     s_screen = pp_screen_create();
     if (!s_screen) return;
@@ -793,7 +672,7 @@ static void build_games(void)
     lv_obj_set_style_pad_all(s_games_more_bottom, 0, 0);
     lv_obj_remove_flag(s_games_more_bottom, LV_OBJ_FLAG_SCROLLABLE);
 
-    pp_footer(s_screen, "OK 查看 · 长按OK 返回");
+    pp_footer(s_screen, "OK 显示链接二维码 · 长按OK 返回");
     set_current(s_screen, PAGE_GAMES, &s_games_bar);
     games_render_window();
 }
@@ -809,107 +688,8 @@ static void games_move(int delta)
     }
     if (next == s_game_sel) return;
     s_game_sel = next;
-    const size_t old_start = s_window_start;
-    window_follow_selection();
-    if (old_start != s_window_start) {
-        games_render_window();
-    } else {
-        games_refresh_selection();
-    }
-}
-
-/* ------------------------------------------------------------------------- */
-/* Game detail                                                               */
-/* ------------------------------------------------------------------------- */
-
-static size_t s_detail_index;
-static pp_loaded_image_t s_detail_cover;
-static bool s_detail_cover_loaded;
-
-static void free_detail_cover(void)
-{
-    if (s_detail_cover_loaded) {
-        pp_image_free(&s_detail_cover);
-        s_detail_cover_loaded = false;
-    }
-}
-
-static void build_detail(size_t index)
-{
-    destroy_all_pages();
-    s_detail_index = index;
-    const pp_game_t *game = s_games && index < s_games->count
-                                ? &s_games->items[index]
-                                : NULL;
-    if (!game) return;
-
-    s_screen = pp_screen_create();
-    if (!s_screen) return;
-    s_detail_bar = pp_topbar_create(s_screen);
-    s_active_bar = &s_detail_bar;
-    pp_page_title(s_screen, "游戏详情");
-
-    lv_obj_t *frame = pp_panel_create(s_screen, 12, 60, 76, 112);
-    if (game->has_cover && s_storage) {
-        char rel[PP_STORAGE_PATH_MAX];
-        if (pp_image_cover_path(game->id, rel, sizeof(rel)) &&
-            pp_image_load(s_storage, rel, &s_detail_cover) == PP_STORAGE_OK) {
-            s_detail_cover_loaded = true;
-            pp_image_widget_create(frame, &s_detail_cover, 2, 2,
-                                   PP_IMAGE_COVER_W, PP_IMAGE_COVER_H);
-        }
-    }
-    if (!s_detail_cover_loaded) {
-        lv_obj_t *placeholder = pp_icon_create(frame, PP_ICON_IMAGE,
-                                               PP_COLOR_DIM, 24, 42);
-        if (placeholder) lv_obj_set_size(placeholder, 28, 28);
-    }
-
-    lv_obj_t *title = dyn_label(s_screen, &pp_font_24, PP_COLOR_TEXT, 96, 58,
-                                132, 56, game->title);
-    if (title) lv_label_set_long_mode(title, LV_LABEL_LONG_MODE_DOTS);
-
-    lv_obj_t *badge_bar = lv_obj_create(s_screen);
-    lv_obj_set_pos(badge_bar, 96, 121);
-    lv_obj_set_size(badge_bar, 3, 12);
-    lv_obj_set_style_bg_color(badge_bar, lv_color_hex(PP_COLOR_MINT), 0);
-    lv_obj_set_style_bg_opa(badge_bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(badge_bar, 0, 0);
-    lv_obj_set_style_radius(badge_bar, 0, 0);
-    lv_obj_set_style_pad_all(badge_bar, 0, 0);
-    lv_obj_remove_flag(badge_bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    pp_label_create(s_screen,
-                    game->group == PP_GAME_GROUP_FAVORITE ? "喜欢的游戏"
-                                                          : "正在玩的游戏",
-                    &pp_font_12, PP_COLOR_MINT, 103, 119, 120);
-
-    pp_label_create(s_screen, "游戏链接", &pp_font_12, PP_COLOR_DIM, 96,
-                    142, 120);
-    pp_label_create(s_screen, game->link[0] ? "已设置" : "未设置", &pp_font_12,
-                    game->link[0] ? PP_COLOR_MINT : PP_COLOR_DIM, 96, 158,
-                    120);
-
-    lv_obj_t *intro_panel = pp_panel_create(s_screen, 12, 176, 216, 72);
-    pp_label_create(intro_panel, "简介", &pp_font_12, PP_COLOR_MINT, 8, 6, 60);
-    lv_obj_t *intro = dyn_label(intro_panel, &pp_font_12, PP_COLOR_MUTED, 8, 24,
-                                200, 48,
-                                game->note[0] ? game->note : "暂无介绍");
-    if (intro) lv_label_set_long_mode(intro, LV_LABEL_LONG_MODE_DOTS);
-
-    lv_obj_t *link_row = pp_panel_create(s_screen, 12, 256, 216, 26);
-    pp_icon_create(link_row, PP_ICON_LINK,
-                   game->link[0] ? PP_COLOR_MINT : PP_COLOR_DIM, 6, 6);
-    pp_label_create(link_row,
-                    game->link[0] ? "游戏链接入口" : "未设置游戏链接",
-                    &pp_font_12,
-                    game->link[0] ? PP_COLOR_TEXT : PP_COLOR_DIM, 26, 5, 160);
-    if (game->link[0]) {
-        pp_icon_create(link_row, PP_ICON_CHEVRON, PP_COLOR_MINT, 198, 7);
-    }
-
-    pp_footer(s_screen, "OK 显示二维码 · 长按OK 返回");
-    set_current(s_screen, PAGE_DETAIL, &s_detail_bar);
+    // The visible window starts at the selection, so every move re-renders.
+    games_render_window();
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1105,60 +885,6 @@ static void contact_activate(size_t index)
     } else {
         show_notice(title,
                     "这条联系方式还没有账号或链接。请在管理后台补充。");
-    }
-}
-
-/* ------------------------------------------------------------------------- */
-/* NFC                                                                       */
-/* ------------------------------------------------------------------------- */
-
-static void build_nfc(void)
-{
-    destroy_all_pages();
-    s_screen = pp_screen_create();
-    if (!s_screen) return;
-    s_nfc_bar = pp_topbar_create(s_screen);
-    s_active_bar = &s_nfc_bar;
-    pp_page_title(s_screen, "NFC 名片");
-
-    const bool enabled = s_nfc && s_nfc->enabled;
-    lv_obj_t *panel = pp_panel_create(s_screen, 12, 60, 216, 190);
-    if (!enabled) {
-        pp_icon_create(panel, PP_ICON_TAG, PP_COLOR_DIM, 18, 18);
-        pp_label_create(panel, "未启用 NFC 入口", &pp_font_24, PP_COLOR_DIM,
-                        18, 46, 180);
-        dyn_label(panel, &pp_font_12, PP_COLOR_MUTED, 18, 92, 180, 70,
-                  "在管理后台的 NFC 页面填写入口内容。设备会把内容显示在这里，"
-                  "供你写入卡片上的 NTAG213 标签。");
-    } else {
-        dyn_label(panel, &pp_font_24, PP_COLOR_TEXT, 12, 10, 192, 32,
-                  s_nfc->label);
-        pp_label_create(panel,
-                        s_nfc->type == PP_NFC_TYPE_URL ? "网址入口" : "文本入口",
-                        &pp_font_12, PP_COLOR_MINT, 12, 46, 100);
-        lv_obj_t *content = dyn_label(panel, &pp_font_12, PP_COLOR_MUTED, 12,
-                                      68, 192, 78, s_nfc->content);
-        if (content) lv_label_set_long_mode(content, LV_LABEL_LONG_MODE_DOTS);
-        dyn_label(panel, &pp_font_12, PP_COLOR_DIM, 12, 152, 192, 30,
-                  "把以上内容写入卡片上的 NTAG213 标签，手机靠近即可打开。");
-    }
-    pp_footer(s_screen,
-              enabled ? (s_nfc->type == PP_NFC_TYPE_URL ? "OK 显示二维码 · 长按OK 返回"
-                                                        : "OK 放大查看 · 长按OK 返回")
-                      : "长按OK 返回");
-    set_current(s_screen, PAGE_NFC, &s_nfc_bar);
-}
-
-static void nfc_activate(void)
-{
-    if (!s_nfc || !s_nfc->enabled) {
-        show_notice("NFC 名片", "NFC 入口尚未启用。请先在管理后台配置内容。");
-        return;
-    }
-    if (s_nfc->type == PP_NFC_TYPE_URL) {
-        show_generated_qr("NFC 入口", s_nfc->content, s_nfc->label);
-    } else {
-        show_text_overlay("NFC 文本", s_nfc->content, false);
     }
 }
 
@@ -1401,14 +1127,12 @@ void ui_app_update_manage(const ui_manage_info_t *info)
 /* ------------------------------------------------------------------------- */
 
 void ui_app_set_data(const pp_storage_t *storage, const pp_profile_t *profile,
-                     const pp_profile_images_t *images, const pp_games_t *games,
-                     const pp_nfc_t *nfc)
+                     const pp_profile_images_t *images, const pp_games_t *games)
 {
     s_storage = storage;
     s_profile = profile;
     s_images = images;
     s_games = games;
-    s_nfc = nfc;
 }
 
 void ui_app_set_battery(int soc_percent)
@@ -1431,11 +1155,7 @@ ui_action_t ui_app_handle_key(bsp_btn_t button, bsp_btn_ev_t event)
             return UI_ACTION_NONE;
         case PAGE_GAMES:
         case PAGE_CONTACT:
-        case PAGE_NFC:
             build_home();
-            return UI_ACTION_NONE;
-        case PAGE_DETAIL:
-            build_games();
             return UI_ACTION_NONE;
         case PAGE_MANAGE:
             return UI_ACTION_EXIT_MANAGE;
@@ -1465,8 +1185,7 @@ ui_action_t ui_app_handle_key(bsp_btn_t button, bsp_btn_ev_t event)
             home_refresh();
         } else if (button == BSP_BTN_OK) {
             if (s_home_sel == 0) build_games();
-            else if (s_home_sel == 1) build_contact();
-            else build_nfc();
+            else build_contact();
         }
         break;
     case PAGE_GAMES:
@@ -1476,17 +1195,10 @@ ui_action_t ui_app_handle_key(bsp_btn_t button, bsp_btn_ev_t event)
         } else if (button == BSP_BTN_DOWN) {
             games_move(1);
         } else if (button == BSP_BTN_OK) {
-            build_detail(s_game_sel);
-        }
-        break;
-    case PAGE_DETAIL:
-        if (button == BSP_BTN_OK) {
-            const pp_game_t *game =
-                s_games && s_detail_index < s_games->count
-                    ? &s_games->items[s_detail_index]
-                    : NULL;
-            if (game && game->link[0]) {
-                show_generated_qr("游戏链接", game->link, game->link);
+            const pp_game_t *game = &s_games->items[s_game_sel];
+            if (game->link[0]) {
+                show_generated_qr("游戏链接", game->link,
+                                  game->title[0] ? game->title : "游戏链接");
             } else {
                 show_notice("游戏链接",
                             "这款游戏还没有设置通用链接。请在管理后台补充。");
@@ -1501,9 +1213,6 @@ ui_action_t ui_app_handle_key(bsp_btn_t button, bsp_btn_ev_t event)
         } else if (button == BSP_BTN_OK && contact_count() > 0) {
             contact_activate(s_contact_sel);
         }
-        break;
-    case PAGE_NFC:
-        if (button == BSP_BTN_OK) nfc_activate();
         break;
     case PAGE_OVERLAY:
         if (button == BSP_BTN_OK) overlay_finish();

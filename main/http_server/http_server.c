@@ -641,48 +641,6 @@ static esp_err_t handler_games_put(httpd_req_t *req)
     return send_json_text(req, 200, reply);
 }
 
-/* --------------------------------- nfc ---------------------------------- */
-
-static esp_err_t handler_nfc_get(httpd_req_t *req)
-{
-    if (!s_ctx) return send_error(req, 500, "internal", "server not ready");
-    char *json = pp_nfc_to_json(s_ctx->nfc);
-    if (!json) return send_error(req, 500, "internal", "内存不足");
-    return send_json_text(req, 200, json);
-}
-
-static esp_err_t handler_nfc_put(httpd_req_t *req)
-{
-    if (!authorize(req, NULL, 0)) {
-        return send_error(req, 401, "lease", "编辑权限已失效");
-    }
-    char *body = NULL;
-    size_t length = 0;
-    int code = 400;
-    if (read_body(req, &body, &length, 4096, &code) != ESP_OK) {
-        return send_error(req, code, "body", "请求内容无效");
-    }
-    pp_nfc_t parsed;
-    char error[160];
-    const bool ok = pp_nfc_from_json(body, &parsed, error, sizeof(error));
-    free(body);
-    if (!ok) return send_error(req, 400, "nfc", error);
-    if (!check_font_field("NFC 标题", parsed.label, error, sizeof(error)) ||
-        !check_font_field("NFC 内容", parsed.content, error, sizeof(error))) {
-        return send_error(req, 400, "font", error);
-    }
-    char *file_json = pp_nfc_to_json(&parsed);
-    if (!file_json) return send_error(req, 500, "internal", "内存不足");
-    const pp_storage_err_t write = pp_storage_write_atomic(
-        s_ctx->storage, "data/nfc.json", file_json, strlen(file_json));
-    cJSON_free(file_json);
-    if (write != PP_STORAGE_OK) return storage_failure(req, write);
-    *s_ctx->nfc = parsed;
-    char *reply = pp_nfc_to_json(s_ctx->nfc);
-    if (!reply) return send_error(req, 500, "internal", "内存不足");
-    return send_json_text(req, 200, reply);
-}
-
 /* -------------------------------- images -------------------------------- */
 
 static const char *slot_from_uri(httpd_req_t *req)
@@ -1026,8 +984,6 @@ static const httpd_uri_t URIS[] = {
     { .uri = "/api/profile", .method = HTTP_PUT, .handler = handler_profile_put },
     { .uri = "/api/games", .method = HTTP_GET, .handler = handler_games_get },
     { .uri = "/api/games", .method = HTTP_PUT, .handler = handler_games_put },
-    { .uri = "/api/nfc", .method = HTTP_GET, .handler = handler_nfc_get },
-    { .uri = "/api/nfc", .method = HTTP_PUT, .handler = handler_nfc_put },
     { .uri = "/api/images/*", .method = HTTP_GET, .handler = handler_image_get },
     { .uri = "/api/images/*", .method = HTTP_PUT, .handler = handler_image_put },
     { .uri = "/api/images/*", .method = HTTP_DELETE,

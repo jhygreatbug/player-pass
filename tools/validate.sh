@@ -98,7 +98,7 @@ run_static_checks() {
     "${test_dir}/test_mgmt_session"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -Imain/third_party/cjson \
         tests/test_models.c main/data/profile.c main/data/games.c \
-        main/data/nfc.c main/data/data_validate.c main/app/text_utf8.c \
+        main/data/data_validate.c main/app/text_utf8.c \
         main/third_party/cjson/cJSON.c \
         -o "${test_dir}/test_models"
     "${test_dir}/test_models"

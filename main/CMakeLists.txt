@@ -4,7 +4,6 @@ idf_component_register(
          "app/text_utf8.c"
          "data/profile.c"
          "data/games.c"
-         "data/nfc.c"
          "data/data_validate.c"
          "storage/storage.c"
          "storage/storage_budget.c"

@@ -11,7 +11,6 @@
 #include <stdint.h>
 
 #include "data/games.h"
-#include "data/nfc.h"
 #include "data/profile.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -24,7 +23,6 @@ typedef struct {
     pp_profile_t *profile;
     pp_profile_images_t *images;
     pp_games_t *games;
-    pp_nfc_t *nfc;
     pp_mgmt_session_t *session;
     SemaphoreHandle_t session_lock;
     const char *ap_ssid;

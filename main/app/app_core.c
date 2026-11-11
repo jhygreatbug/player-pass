@@ -12,7 +12,6 @@
 #include "bsp_pins.h"
 #include "cJSON.h"
 #include "data/games.h"
-#include "data/nfc.h"
 #include "data/profile.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -39,7 +38,6 @@ static const char *TAG = "app";
 #define INPUT_QUEUE_DEPTH 8
 #define PROFILE_FILE_MAX (16u * 1024u)
 #define GAMES_FILE_MAX (48u * 1024u)
-#define NFC_FILE_MAX (4u * 1024u)
 #define BATTERY_REFRESH_MS (30 * 1000)
 #define DIM_DELAY_MS (60 * 1000)
 
@@ -53,7 +51,6 @@ static bool s_storage_ready;
 static pp_profile_t s_profile;
 static pp_profile_images_t s_images;
 static pp_games_t s_games;
-static pp_nfc_t s_nfc;
 static char s_data_warning[256];
 
 static QueueHandle_t s_key_queue;
@@ -198,32 +195,12 @@ static void load_games(void)
     free(json);
 }
 
-static void load_nfc(void)
-{
-    pp_nfc_defaults(&s_nfc);
-    bool missing = false;
-    char *json = read_file_alloc("data/nfc.json", NFC_FILE_MAX, &missing);
-    if (missing) {
-        char *defaults = pp_nfc_to_json(&s_nfc);
-        write_default("data/nfc.json", defaults);
-        return;
-    }
-    if (!json) return;
-    char error[128];
-    if (!pp_nfc_from_json(json, &s_nfc, error, sizeof(error))) {
-        pp_nfc_defaults(&s_nfc);
-        add_warning("NFC 配置文件异常：%s", error);
-    }
-    free(json);
-}
-
 static void load_data(void)
 {
     s_data_warning[0] = '\0';
     pp_profile_images_clear(&s_images);
     load_profile();
     load_games();
-    load_nfc();
     if (pp_image_profile_flags(&s_storage, &s_images) != PP_STORAGE_OK) {
         add_warning("无法检查个人图片");
     }
@@ -318,7 +295,7 @@ static void management_exit(void)
 
     load_data();
     if (bsp_lvgl_lock(1000)) {
-        ui_app_set_data(&s_storage, &s_profile, &s_images, &s_games, &s_nfc);
+        ui_app_set_data(&s_storage, &s_profile, &s_images, &s_games);
         ui_app_set_battery(s_battery_soc);
         ui_app_show_home();
         if (s_data_warning[0]) {
@@ -374,7 +351,6 @@ static void management_enter(void)
         .profile = &s_profile,
         .images = &s_images,
         .games = &s_games,
-        .nfc = &s_nfc,
         .session = &s_session,
         .session_lock = s_session_lock,
         .ap_ssid = s_wifi_status.ssid,
@@ -533,7 +509,7 @@ static bool init_battery_and_buttons(void)
 static void show_home_or_warning(void)
 {
     if (!bsp_lvgl_lock(1000)) return;
-    ui_app_set_data(&s_storage, &s_profile, &s_images, &s_games, &s_nfc);
+    ui_app_set_data(&s_storage, &s_profile, &s_images, &s_games);
     ui_app_set_battery(s_battery_soc);
     ui_app_show_home();
     if (s_data_warning[0]) {

@@ -28,7 +28,6 @@
   <button class="tab" data-tab="profile">个人资料</button>
   <button class="tab" data-tab="games">游戏</button>
   <button class="tab" data-tab="contact">联系方式</button>
-  <button class="tab" data-tab="nfc">NFC</button>
   <button class="tab" data-tab="backup">备份</button>
 </nav>
 
@@ -71,9 +70,10 @@
       <article class="card">
         <h2><span class="accent"></span>使用提示</h2>
         <ul class="tips">
+          <li>编辑内容先保留在当前浏览器，点击底部“保存更改”后一次性写入设备。断开热点再连回来不会覆盖本地未保存的内容。</li>
           <li>图片仅支持 JPG / PNG。浏览器会完成裁剪、压缩并转换为 RGB565，设备端不做解码。</li>
+          <li>游戏搜索和玩家游玩列表来自 Steam，需要手机能访问互联网；部分 Android 机型连接热点时会断开移动数据，此时仍可手动添加游戏。</li>
           <li>手机连接设备热点时，部分 Android 机型会暂时切走移动数据；如果管理页可用但外部链接打不开，请先断开热点再访问。</li>
-          <li>NFC 为无源 NTAG213 标签，固件不能改写。请复制 NFC 内容，用支持 NFC 的手机写入标签。</li>
           <li>支持手动 JSON 导出/导入（含图片）；不提供自动备份、ZIP、历史版本或 OTA。导入不会自动回滚。</li>
         </ul>
       </article>
@@ -88,8 +88,8 @@
           <input id="p-name" data-path="name" maxlength="24" placeholder="例如：阿陈">
           <span class="counter" data-counter-for="p-name"></span>
         </label>
-        <label class="field">Steam ID
-          <input id="p-steam" data-path="platforms.steam.id" maxlength="40" placeholder="Steam 好友代码或自定义 ID">
+        <label class="field">Steam 好友码
+          <input id="p-steam" data-path="platforms.steam.id" maxlength="40" placeholder="例如：12345678">
         </label>
         <label class="field span-two">一句话介绍
           <textarea id="p-tagline" data-path="tagline" maxlength="60" rows="2" placeholder="每天玩一点游戏，也做一点像素小玩意"></textarea>
@@ -103,7 +103,6 @@
         </label>
       </div>
       <div class="actions">
-        <button type="submit" class="btn primary" id="save-profile">保存个人资料</button>
         <span class="dirty" id="profile-dirty"></span>
       </div>
     </form>
@@ -117,7 +116,6 @@
           <div class="preview square"><canvas width="88" height="88"></canvas><span class="empty">未上传</span></div>
           <input type="file" accept="image/jpeg,image/png" class="file-input">
           <div class="image-actions">
-            <button type="button" class="btn small primary" data-action="upload">上传</button>
             <button type="button" class="btn small ghost" data-action="remove">移除</button>
           </div>
           <div class="image-status muted small"></div>
@@ -132,11 +130,39 @@
         <h2><span class="accent"></span>游戏收藏</h2>
         <div class="head-actions">
           <button class="btn small primary" id="add-game" data-mutation>新增游戏</button>
-          <button class="btn small" id="save-games" data-mutation>保存游戏列表</button>
         </div>
       </div>
-      <p class="muted small">列表按“喜欢的游戏 → 正在玩的游戏”连续展示。设备默认展示约 10 款；游戏数量受设备存储与内存限制。</p>
-      <div class="games-list" id="games-list"></div>
+      <p class="muted small">列表按“喜欢的游戏 → 正在玩的游戏”分组展示。设备一屏显示两张封面卡片；游戏数量受设备存储与内存限制。</p>
+
+      <div class="game-picker hidden" id="game-picker">
+        <div class="picker-tabs" role="tablist" aria-label="添加游戏来源">
+          <button type="button" class="picker-tab active" data-source="search" data-mutation role="tab">Steam 搜索</button>
+          <button type="button" class="picker-tab" data-source="recent" data-mutation role="tab">最近游玩</button>
+          <button type="button" class="picker-tab" data-source="most-played" data-mutation role="tab">游玩时长</button>
+          <button type="button" class="picker-tab" data-source="manual" data-mutation role="tab">手动填写</button>
+          <button type="button" class="btn small ghost picker-close" id="picker-close">关闭</button>
+        </div>
+        <div class="picker-panel" id="picker-search">
+          <label class="field">搜索 Steam 游戏
+            <input id="steam-search" data-mutation maxlength="100" placeholder="例如：Hollow Knight" autocomplete="off">
+          </label>
+          <p class="muted small">中文关键词在 Steam 搜索中的匹配较差，建议用英文名或游戏原名。在线功能需要手机能访问互联网。</p>
+          <div class="candidate-list" id="search-results"></div>
+          <p class="picker-status muted small" id="search-status"></p>
+        </div>
+        <div class="picker-panel hidden" id="picker-recent">
+          <p class="muted small">来自 Steam 最近两周的游玩记录。</p>
+          <div class="candidate-list" id="recent-results"></div>
+          <p class="picker-status muted small" id="recent-status"></p>
+        </div>
+        <div class="picker-panel hidden" id="picker-most-played">
+          <p class="muted small" id="most-played-summary">按累计游玩时长排序。</p>
+          <div class="candidate-list" id="most-played-results"></div>
+          <p class="picker-status muted small" id="most-played-status"></p>
+        </div>
+      </div>
+
+      <div class="games-groups" id="games-groups"></div>
       <p class="empty-state hidden" id="games-empty">还没有游戏。点击“新增游戏”开始。</p>
       <div class="dirty" id="games-dirty"></div>
     </div>
@@ -144,7 +170,12 @@
     <div class="card editor hidden" id="game-editor">
       <div class="card-head">
         <h2><span class="accent"></span><span id="game-editor-title">新增游戏</span></h2>
-        <button class="btn small ghost" id="game-editor-close" type="button">关闭</button>
+        <div class="head-actions">
+          <button class="btn small ghost" id="game-editor-up" data-mutation type="button">上移</button>
+          <button class="btn small ghost" id="game-editor-down" data-mutation type="button">下移</button>
+          <button class="btn small danger" id="game-editor-delete" data-mutation type="button">删除</button>
+          <button class="btn small ghost" id="game-editor-close" type="button">关闭</button>
+        </div>
       </div>
       <div class="grid two">
         <label class="field">游戏名称
@@ -167,15 +198,14 @@
         </label>
       </div>
       <div class="cover-editor">
-        <div class="preview cover"><canvas id="g-cover" width="72" height="108"></canvas><span class="empty">无封面</span></div>
+        <div class="preview cover"><canvas id="g-cover" width="216" height="101"></canvas><span class="empty">无封面</span></div>
         <div>
           <input type="file" id="g-cover-file" accept="image/jpeg,image/png" class="file-input">
           <div class="image-actions">
-            <button type="button" class="btn small primary" id="g-cover-upload" data-mutation>上传封面</button>
             <button type="button" class="btn small ghost" id="g-cover-remove" data-mutation>移除封面</button>
           </div>
-          <p class="muted small">竖版 2:3 裁剪，设备显示 72×108。先保存游戏到列表即可上传封面。</p>
-          <p class="muted small">找封面：<a class="text-link" href="https://www.igdb.com/" target="_blank" rel="noopener noreferrer">IGDB 游戏数据库 ↗</a>（需要外网；手机可先断开热点或使用电脑）。</p>
+          <p class="muted small">Steam 商店封面比例 460:215，设备显示 216×101。选择封面后点击底部“保存更改”写入设备。</p>
+          <p class="muted small">找封面：<a class="text-link" href="https://www.xiaoheihe.cn/app/bbs/home" target="_blank" rel="noopener noreferrer">小黑盒 ↗</a>（需要外网；手机可先断开热点或使用电脑）。</p>
           <div class="image-status muted small" id="g-cover-status"></div>
         </div>
       </div>
@@ -198,47 +228,16 @@
       <div class="contacts-list" id="contacts-list"></div>
       <p class="empty-state hidden" id="contacts-empty">还没有联系方式。点击“新增联系方式”开始。</p>
       <div class="actions">
-        <button type="button" class="btn primary" id="save-contacts" data-mutation>保存联系方式</button>
         <span class="dirty" id="contact-dirty"></span>
       </div>
     </div>
   </section>
 
-  <section class="tab-panel" id="tab-nfc">
-    <form class="card editable" id="nfc-form" autocomplete="off">
-      <h2><span class="accent"></span>NFC 入口</h2>
-      <p class="muted small">卡片上的 NTAG213 是无源标签，固件无法直接改写。这里配置的是要写入标签的内容；设备会显示内容并生成二维码，方便手机写入或复制。</p>
-      <label class="switch field">
-        <input type="checkbox" id="n-enabled">
-        <span>启用 NFC 入口</span>
-      </label>
-      <div class="grid two">
-        <label class="field">入口名称
-          <input id="n-label" maxlength="16" placeholder="例如：个人主页">
-          <span class="counter" data-counter-for="n-label"></span>
-        </label>
-        <label class="field">类型
-          <select id="n-type">
-            <option value="url">网址（生成二维码）</option>
-            <option value="text">文本</option>
-          </select>
-        </label>
-        <label class="field span-two">内容
-          <textarea id="n-content" maxlength="160" rows="4" placeholder="https://… 或一段文字"></textarea>
-          <span class="counter" data-counter-for="n-content"></span>
-        </label>
-      </div>
-      <div class="actions">
-        <button type="submit" class="btn primary" id="save-nfc">保存 NFC 配置</button>
-        <span class="dirty" id="nfc-dirty"></span>
-      </div>
-    </form>
-  </section>
   <section class="tab-panel" id="tab-backup">
     <div class="grid two">
       <article class="card">
         <h2><span class="accent"></span>导出备份</h2>
-        <p class="muted small">把个人资料、游戏列表、NFC 配置和全部图片打包成一个 JSON 备份文件。图片以 PPIM 原始数据 Base64 保存，不包含热点密码。</p>
+        <p class="muted small">把个人资料、游戏列表和全部图片打包成一个 JSON 备份文件。图片以 PPIM 原始数据 Base64 保存，不包含热点密码。</p>
         <div class="actions">
           <button type="button" class="btn primary" id="export-backup" data-readonly-ok>导出全部数据</button>
         </div>
@@ -246,7 +245,7 @@
       </article>
       <article class="card">
         <h2><span class="accent"></span>导入备份</h2>
-        <p class="muted small">导入会覆盖设备上的个人资料、游戏、NFC 与相关图片。建议先导出当前数据；导入需要编辑权限。</p>
+        <p class="muted small">导入会覆盖设备上的个人资料、游戏与相关图片。建议先导出当前数据；导入需要编辑权限。</p>
         <input type="file" id="import-file" accept="application/json,.json" class="file-input">
         <div class="actions">
           <button type="button" class="btn danger" id="import-backup" data-mutation>导入并覆盖</button>
@@ -265,6 +264,14 @@
   </section>
 
 </main>
+
+<div class="save-bar" id="save-bar">
+  <span class="save-status" id="save-status">所有更改已保存</span>
+  <div class="save-actions">
+    <button type="button" class="btn small ghost" id="reload-device" data-readonly-ok>放弃本地更改</button>
+    <button type="button" class="btn primary" id="save-all" data-mutation>保存更改</button>
+  </div>
+</div>
 
 <footer class="footer">Player Pass · 所有资料保存在设备本地 · 手动备份 · 无云端、无登录</footer>
 <div class="toast hidden" id="toast"></div>
