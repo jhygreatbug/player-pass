@@ -239,18 +239,33 @@ static bool check_font_field(const char *field, const char *text, char *error,
 static bool profile_font_check(const pp_profile_t *profile, char *error,
                                size_t error_size)
 {
-    return check_font_field("姓名", profile->name, error, error_size) &&
-           check_font_field("一句话介绍", profile->tagline, error, error_size) &&
-           check_font_field("Steam ID", profile->steam_id, error, error_size) &&
-           check_font_field("Switch ID", profile->switch_id, error, error_size) &&
-           check_font_field("PlayStation ID", profile->psn_id, error,
-                            error_size) &&
-           check_font_field("微博账号", profile->weibo_handle, error,
-                            error_size) &&
-           check_font_field("微博链接", profile->weibo_url, error, error_size) &&
-           check_font_field("微信昵称", profile->wechat_name, error,
-                            error_size) &&
-           check_font_field("微信号", profile->wechat_id, error, error_size);
+    if (!check_font_field("姓名", profile->name, error, error_size) ||
+        !check_font_field("一句话介绍", profile->tagline, error, error_size) ||
+        !check_font_field("Steam ID", profile->steam_id, error, error_size) ||
+        !check_font_field("Switch ID", profile->switch_id, error, error_size) ||
+        !check_font_field("PlayStation ID", profile->psn_id, error,
+                          error_size)) {
+        return false;
+    }
+    for (size_t i = 0; i < profile->contact_count; ++i) {
+        char label[40];
+        snprintf(label, sizeof(label), "联系方式%u平台", (unsigned)i + 1);
+        if (!check_font_field(label, profile->contacts[i].platform, error,
+                              error_size)) {
+            return false;
+        }
+        snprintf(label, sizeof(label), "联系方式%u账号", (unsigned)i + 1);
+        if (!check_font_field(label, profile->contacts[i].account, error,
+                              error_size)) {
+            return false;
+        }
+        snprintf(label, sizeof(label), "联系方式%u链接", (unsigned)i + 1);
+        if (!check_font_field(label, profile->contacts[i].link, error,
+                              error_size)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* ---------------------------- static assets ----------------------------- */
@@ -484,22 +499,37 @@ static esp_err_t handler_profile_put(httpd_req_t *req)
     if (read_body(req, &body, &length, PROFILE_BODY_MAX, &code) != ESP_OK) {
         return send_error(req, code, "body", "请求内容无效");
     }
-    pp_profile_t parsed;
+    pp_profile_t *parsed = calloc(1, sizeof(*parsed));
+    if (!parsed) {
+        free(body);
+        return send_error(req, 500, "internal", "内存不足");
+    }
     char error[160];
-    const bool ok = pp_profile_from_json(body, &parsed, error, sizeof(error));
+    const bool ok = pp_profile_from_json(body, parsed, error, sizeof(error));
     free(body);
-    if (!ok) return send_error(req, 400, "profile", error);
-    if (!profile_font_check(&parsed, error, sizeof(error))) {
+    if (!ok) {
+        free(parsed);
+        return send_error(req, 400, "profile", error);
+    }
+    if (!profile_font_check(parsed, error, sizeof(error))) {
+        free(parsed);
         return send_error(req, 400, "font", error);
     }
-    char *file_json = pp_profile_to_json(&parsed, NULL);
-    if (!file_json) return send_error(req, 500, "internal", "内存不足");
+    char *file_json = pp_profile_to_json(parsed, NULL);
+    if (!file_json) {
+        free(parsed);
+        return send_error(req, 500, "internal", "内存不足");
+    }
     const pp_storage_err_t write = pp_storage_write_atomic(
         s_ctx->storage, "data/profile.json", file_json, strlen(file_json));
     cJSON_free(file_json);
-    if (write != PP_STORAGE_OK) return storage_failure(req, write);
+    if (write != PP_STORAGE_OK) {
+        free(parsed);
+        return storage_failure(req, write);
+    }
 
-    *s_ctx->profile = parsed;
+    *s_ctx->profile = *parsed;
+    free(parsed);
     (void)pp_image_profile_flags(s_ctx->storage, s_ctx->images);
     char *reply = pp_profile_to_json(s_ctx->profile, s_ctx->images);
     if (!reply) return send_error(req, 500, "internal", "内存不足");
@@ -516,7 +546,7 @@ static bool games_font_check(const pp_games_t *games, char *error,
                               error_size) ||
             !check_font_field("游戏介绍", games->items[i].note, error,
                               error_size) ||
-            !check_font_field("小黑盒链接", games->items[i].link, error,
+            !check_font_field("游戏链接", games->items[i].link, error,
                               error_size)) {
             return false;
         }

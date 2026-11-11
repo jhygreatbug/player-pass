@@ -12,16 +12,6 @@ static void test_named_slots(void)
         const char *path;
     } cases[] = {
         { "avatar", PP_IMAGE_SLOT_AVATAR, PP_IMAGE_KIND_AVATAR, "img/avatar.bin" },
-        { "qr_steam", PP_IMAGE_SLOT_QR_STEAM, PP_IMAGE_KIND_QR,
-          "img/qr_steam.bin" },
-        { "qr_switch", PP_IMAGE_SLOT_QR_SWITCH, PP_IMAGE_KIND_QR,
-          "img/qr_switch.bin" },
-        { "qr_psn", PP_IMAGE_SLOT_QR_PSN, PP_IMAGE_KIND_QR,
-          "img/qr_psn.bin" },
-        { "qr_wechat", PP_IMAGE_SLOT_QR_WECHAT, PP_IMAGE_KIND_QR,
-          "img/qr_wechat.bin" },
-        { "qr_wechat_pay", PP_IMAGE_SLOT_QR_WECHAT_PAY, PP_IMAGE_KIND_QR,
-          "img/qr_wechat_pay.bin" },
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         pp_image_slot_info_t info;
@@ -56,6 +46,7 @@ static void test_invalid_slots(void)
     CHECK(!pp_image_slot_parse("games/../avatar", &info));
     CHECK(!pp_image_slot_parse("games/g-a1b2/x", &info));
     CHECK(!pp_image_slot_parse("other", &info));
+    CHECK(!pp_image_slot_parse("qr_wechat", &info));
     CHECK(!pp_image_slot_parse("avatar/extra", &info));
     CHECK(!pp_image_slot_path(NULL, NULL, 0));
     char small[8];
@@ -71,11 +62,6 @@ static void test_convenience_paths(void)
     CHECK(pp_image_cover_path("g-a1b2c3", rel, sizeof(rel)));
     CHECK_STR_EQ(rel, "img/games/g-a1b2c3.bin");
     CHECK(!pp_image_cover_path("bad id", rel, sizeof(rel)));
-    CHECK(pp_image_profile_qr_path(PP_IMAGE_SLOT_QR_WECHAT_PAY, rel,
-                                   sizeof(rel)));
-    CHECK_STR_EQ(rel, "img/qr_wechat_pay.bin");
-    CHECK(!pp_image_profile_qr_path(PP_IMAGE_SLOT_AVATAR, rel, sizeof(rel)));
-    CHECK(!pp_image_profile_qr_path(PP_IMAGE_SLOT_GAME_COVER, rel, sizeof(rel)));
 }
 
 int main(void)

@@ -1,11 +1,17 @@
 #include "data/profile.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "app/text_utf8.h"
 #include "cJSON.h"
 #include "data/data_validate.h"
+
+#define PP_PROFILE_VERSION_LEGACY 1
+#define PP_PROFILE_LEGACY_WEIBO_ACCOUNT_CP 40
+#define PP_PROFILE_LEGACY_WECHAT_NAME_CP 24
+#define PP_PROFILE_LEGACY_WECHAT_ID_CP 40
 
 static bool get_string(const cJSON *parent, const char *key, char *dst,
                        size_t dst_size, size_t max_codepoints, bool required,
@@ -77,9 +83,6 @@ bool pp_profile_validate(const pp_profile_t *profile, char *error,
         { profile->steam_id, "steam_id", PP_PROFILE_PLATFORM_ID_CP },
         { profile->switch_id, "switch_id", PP_PROFILE_PLATFORM_ID_CP },
         { profile->psn_id, "psn_id", PP_PROFILE_PLATFORM_ID_CP },
-        { profile->weibo_handle, "weibo_handle", PP_PROFILE_WEIBO_HANDLE_CP },
-        { profile->wechat_name, "wechat_name", PP_PROFILE_WECHAT_NAME_CP },
-        { profile->wechat_id, "wechat_id", PP_PROFILE_WECHAT_ID_CP },
     };
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
         if (!pp_field_valid(fields[i].value, fields[i].limit, false)) {
@@ -88,10 +91,35 @@ bool pp_profile_validate(const pp_profile_t *profile, char *error,
             return false;
         }
     }
-    if (!pp_optional_url_valid(profile->weibo_url)) {
-        pp_set_error(error, error_size,
-                     "weibo_url must be an http(s) URL without spaces");
+    if (profile->contact_count > PP_PROFILE_CONTACT_MAX) {
+        pp_set_error(error, error_size, "contacts exceeds %u entries",
+                     (unsigned)PP_PROFILE_CONTACT_MAX);
         return false;
+    }
+    for (size_t i = 0; i < profile->contact_count; ++i) {
+        const pp_contact_t *contact = &profile->contacts[i];
+        if (contact->platform[0] == '\0' ||
+            !pp_field_valid(contact->platform,
+                            PP_PROFILE_CONTACT_PLATFORM_CP, false)) {
+            pp_set_error(error, error_size,
+                         "contacts[%u].platform is invalid or too long",
+                         (unsigned)i);
+            return false;
+        }
+        if (!pp_field_valid(contact->account, PP_PROFILE_CONTACT_ACCOUNT_CP,
+                            false)) {
+            pp_set_error(error, error_size,
+                         "contacts[%u].account is invalid or too long",
+                         (unsigned)i);
+            return false;
+        }
+        if (!pp_optional_url_valid(contact->link)) {
+            pp_set_error(error, error_size,
+                         "contacts[%u].link must be an http(s) URL without "
+                         "spaces",
+                         (unsigned)i);
+            return false;
+        }
     }
     return true;
 }
@@ -99,6 +127,21 @@ bool pp_profile_validate(const pp_profile_t *profile, char *error,
 static void add_string(cJSON *root, const char *key, const char *value)
 {
     cJSON_AddStringToObject(root, key, value ? value : "");
+}
+
+static bool add_contacts(cJSON *root, const pp_profile_t *profile)
+{
+    cJSON *contacts = cJSON_AddArrayToObject(root, "contacts");
+    if (!contacts) return false;
+    for (size_t i = 0; i < profile->contact_count; ++i) {
+        cJSON *item = cJSON_CreateObject();
+        if (!item) return false;
+        add_string(item, "platform", profile->contacts[i].platform);
+        add_string(item, "account", profile->contacts[i].account);
+        add_string(item, "link", profile->contacts[i].link);
+        cJSON_AddItemToArray(contacts, item);
+    }
+    return true;
 }
 
 char *pp_profile_to_json(const pp_profile_t *profile,
@@ -123,17 +166,10 @@ char *pp_profile_to_json(const pp_profile_t *profile,
     add_string(switch_, "id", profile->switch_id);
     add_string(psn, "id", profile->psn_id);
 
-    cJSON *contact = cJSON_AddObjectToObject(root, "contact");
-    cJSON *weibo = contact ? cJSON_AddObjectToObject(contact, "weibo") : NULL;
-    cJSON *wechat = contact ? cJSON_AddObjectToObject(contact, "wechat") : NULL;
-    if (!contact || !weibo || !wechat) {
+    if (!add_contacts(root, profile)) {
         cJSON_Delete(root);
         return NULL;
     }
-    add_string(weibo, "handle", profile->weibo_handle);
-    add_string(weibo, "url", profile->weibo_url);
-    add_string(wechat, "name", profile->wechat_name);
-    add_string(wechat, "id", profile->wechat_id);
 
     if (images) {
         cJSON *flags = cJSON_AddObjectToObject(root, "images");
@@ -142,16 +178,145 @@ char *pp_profile_to_json(const pp_profile_t *profile,
             return NULL;
         }
         cJSON_AddBoolToObject(flags, "avatar", images->avatar);
-        cJSON_AddBoolToObject(flags, "steam_qr", images->steam_qr);
-        cJSON_AddBoolToObject(flags, "switch_qr", images->switch_qr);
-        cJSON_AddBoolToObject(flags, "psn_qr", images->psn_qr);
-        cJSON_AddBoolToObject(flags, "wechat_qr", images->wechat_qr);
-        cJSON_AddBoolToObject(flags, "wechat_pay_qr", images->wechat_pay_qr);
     }
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return json;
+}
+
+static bool parse_contacts(const cJSON *root, pp_profile_t *profile, char *error,
+                           size_t error_size)
+{
+    const cJSON *contacts = cJSON_GetObjectItemCaseSensitive(root, "contacts");
+    if (!contacts || cJSON_IsNull(contacts)) return true;
+    if (!cJSON_IsArray(contacts)) {
+        pp_set_error(error, error_size, "contacts must be an array");
+        return false;
+    }
+    const int count = cJSON_GetArraySize(contacts);
+    if (count > PP_PROFILE_CONTACT_MAX) {
+        pp_set_error(error, error_size, "contacts exceeds %u entries",
+                     (unsigned)PP_PROFILE_CONTACT_MAX);
+        return false;
+    }
+    for (int i = 0; i < count; ++i) {
+        const cJSON *item = cJSON_GetArrayItem(contacts, i);
+        if (!cJSON_IsObject(item)) {
+            pp_set_error(error, error_size,
+                         "contacts[%d] must be an object", i);
+            return false;
+        }
+        pp_contact_t *contact = &profile->contacts[i];
+        char field[40];
+        snprintf(field, sizeof(field), "contacts[%d].platform", i);
+        if (!get_string(item, "platform", contact->platform,
+                        sizeof(contact->platform),
+                        PP_PROFILE_CONTACT_PLATFORM_CP, true, field, error,
+                        error_size)) {
+            return false;
+        }
+        snprintf(field, sizeof(field), "contacts[%d].account", i);
+        if (!get_string(item, "account", contact->account,
+                        sizeof(contact->account),
+                        PP_PROFILE_CONTACT_ACCOUNT_CP, false, field, error,
+                        error_size)) {
+            return false;
+        }
+        snprintf(field, sizeof(field), "contacts[%d].link", i);
+        if (!get_string(item, "link", contact->link, sizeof(contact->link),
+                        PP_PROFILE_URL_BYTES - 1, false, field, error,
+                        error_size)) {
+            return false;
+        }
+        profile->contact_count = (size_t)i + 1;
+    }
+    return true;
+}
+
+static bool append_contact(pp_profile_t *profile, const char *platform,
+                           const char *account, const char *link, char *error,
+                           size_t error_size)
+{
+    if (profile->contact_count >= PP_PROFILE_CONTACT_MAX) {
+        pp_set_error(error, error_size, "contacts exceeds %u entries",
+                     (unsigned)PP_PROFILE_CONTACT_MAX);
+        return false;
+    }
+    pp_contact_t *contact = &profile->contacts[profile->contact_count];
+    memset(contact, 0, sizeof(*contact));
+    snprintf(contact->platform, sizeof(contact->platform), "%s",
+             platform ? platform : "");
+    snprintf(contact->account, sizeof(contact->account), "%s",
+             account ? account : "");
+    snprintf(contact->link, sizeof(contact->link), "%s", link ? link : "");
+    ++profile->contact_count;
+    return true;
+}
+
+// v1 stored fixed contact.weibo / contact.wechat objects.  Convert them into
+// generic entries so an upgrade keeps the text the user already entered.
+static bool parse_legacy_contact(const cJSON *root, pp_profile_t *profile,
+                                 char *error, size_t error_size)
+{
+    const cJSON *contact = cJSON_GetObjectItemCaseSensitive(root, "contact");
+    if (!contact || cJSON_IsNull(contact)) return true;
+    if (!cJSON_IsObject(contact)) {
+        pp_set_error(error, error_size, "contact must be an object");
+        return false;
+    }
+
+    const cJSON *weibo = cJSON_GetObjectItemCaseSensitive(contact, "weibo");
+    if (weibo && !cJSON_IsNull(weibo)) {
+        if (!cJSON_IsObject(weibo)) {
+            pp_set_error(error, error_size,
+                         "contact.weibo must be an object");
+            return false;
+        }
+        char handle[PP_PROFILE_CONTACT_ACCOUNT_CP * 4 + 1];
+        char url[PP_PROFILE_URL_BYTES];
+        if (!get_string(weibo, "handle", handle, sizeof(handle),
+                        PP_PROFILE_LEGACY_WEIBO_ACCOUNT_CP, false,
+                        "contact.weibo.handle", error, error_size) ||
+            !get_string(weibo, "url", url, sizeof(url),
+                        PP_PROFILE_URL_BYTES - 1, false, "contact.weibo.url",
+                        error, error_size)) {
+            return false;
+        }
+        if ((handle[0] || url[0]) &&
+            !append_contact(profile, "微博", handle, url, error,
+                            error_size)) {
+            return false;
+        }
+    }
+
+    const cJSON *wechat = cJSON_GetObjectItemCaseSensitive(contact, "wechat");
+    if (wechat && !cJSON_IsNull(wechat)) {
+        if (!cJSON_IsObject(wechat)) {
+            pp_set_error(error, error_size,
+                         "contact.wechat must be an object");
+            return false;
+        }
+        char name[PP_PROFILE_CONTACT_ACCOUNT_CP * 4 + 1];
+        char id[PP_PROFILE_CONTACT_ACCOUNT_CP * 4 + 1];
+        if (!get_string(wechat, "name", name, sizeof(name),
+                        PP_PROFILE_LEGACY_WECHAT_NAME_CP, false,
+                        "contact.wechat.name", error, error_size) ||
+            !get_string(wechat, "id", id, sizeof(id),
+                        PP_PROFILE_LEGACY_WECHAT_ID_CP, false,
+                        "contact.wechat.id", error, error_size)) {
+            return false;
+        }
+        if (name[0] &&
+            !append_contact(profile, "微信", name, "", error, error_size)) {
+            return false;
+        }
+        if (id[0] && !append_contact(profile, "微信号", id, "", error,
+                                     error_size)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool pp_profile_from_json(const char *json, pp_profile_t *profile, char *error,
@@ -166,8 +331,14 @@ bool pp_profile_from_json(const char *json, pp_profile_t *profile, char *error,
         pp_set_error(error, error_size, "profile is not valid JSON");
         return false;
     }
-    pp_profile_t parsed;
-    pp_profile_defaults(&parsed);
+    // The model is large (contacts carry links); keep it off the HTTP task
+    // stack and only commit it after the whole record validates.
+    pp_profile_t *parsed = calloc(1, sizeof(*parsed));
+    if (!parsed) {
+        pp_set_error(error, error_size, "out of memory");
+        cJSON_Delete(root);
+        return false;
+    }
     bool ok = false;
 
     if (!cJSON_IsObject(root)) {
@@ -175,13 +346,20 @@ bool pp_profile_from_json(const char *json, pp_profile_t *profile, char *error,
         goto done;
     }
     const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "version");
-    if (!cJSON_IsNumber(version) || version->valuedouble != PP_PROFILE_VERSION) {
+    if (!cJSON_IsNumber(version)) {
         pp_set_error(error, error_size, "unsupported profile version");
         goto done;
     }
-    if (!get_string(root, "name", parsed.name, sizeof(parsed.name),
+    const double version_value = version->valuedouble;
+    if (version_value != (double)PP_PROFILE_VERSION &&
+        version_value != (double)PP_PROFILE_VERSION_LEGACY) {
+        pp_set_error(error, error_size, "unsupported profile version");
+        goto done;
+    }
+    const int version_number = (int)version_value;
+    if (!get_string(root, "name", parsed->name, sizeof(parsed->name),
                     PP_PROFILE_NAME_CP, false, "name", error, error_size) ||
-        !get_string(root, "tagline", parsed.tagline, sizeof(parsed.tagline),
+        !get_string(root, "tagline", parsed->tagline, sizeof(parsed->tagline),
                     PP_PROFILE_TAGLINE_CP, false, "tagline", error,
                     error_size)) {
         goto done;
@@ -200,9 +378,10 @@ bool pp_profile_from_json(const char *json, pp_profile_t *profile, char *error,
             size_t size;
             const char *field;
         } platform_fields[] = {
-            { "steam", parsed.steam_id, sizeof(parsed.steam_id), "steam.id" },
-            { "switch", parsed.switch_id, sizeof(parsed.switch_id), "switch.id" },
-            { "playstation", parsed.psn_id, sizeof(parsed.psn_id),
+            { "steam", parsed->steam_id, sizeof(parsed->steam_id), "steam.id" },
+            { "switch", parsed->switch_id, sizeof(parsed->switch_id),
+              "switch.id" },
+            { "playstation", parsed->psn_id, sizeof(parsed->psn_id),
               "playstation.id" },
         };
         for (size_t i = 0;
@@ -224,51 +403,18 @@ bool pp_profile_from_json(const char *json, pp_profile_t *profile, char *error,
         }
     }
 
-    const cJSON *contact = cJSON_GetObjectItemCaseSensitive(root, "contact");
-    if (contact && !cJSON_IsObject(contact)) {
-        pp_set_error(error, error_size, "contact must be an object");
+    if (version_number == PP_PROFILE_VERSION_LEGACY) {
+        if (!parse_legacy_contact(root, parsed, error, error_size)) goto done;
+    } else if (!parse_contacts(root, parsed, error, error_size)) {
         goto done;
     }
-    if (contact) {
-        const cJSON *weibo = cJSON_GetObjectItemCaseSensitive(contact, "weibo");
-        const cJSON *wechat = cJSON_GetObjectItemCaseSensitive(contact, "wechat");
-        if (weibo && !cJSON_IsNull(weibo)) {
-            if (!cJSON_IsObject(weibo)) {
-                pp_set_error(error, error_size, "contact.weibo must be an object");
-                goto done;
-            }
-            if (!get_string(weibo, "handle", parsed.weibo_handle,
-                            sizeof(parsed.weibo_handle),
-                            PP_PROFILE_WEIBO_HANDLE_CP, false,
-                            "contact.weibo.handle", error, error_size) ||
-                !get_string(weibo, "url", parsed.weibo_url,
-                            sizeof(parsed.weibo_url), 480, false,
-                            "contact.weibo.url", error, error_size)) {
-                goto done;
-            }
-        }
-        if (wechat && !cJSON_IsNull(wechat)) {
-            if (!cJSON_IsObject(wechat)) {
-                pp_set_error(error, error_size,
-                             "contact.wechat must be an object");
-                goto done;
-            }
-            if (!get_string(wechat, "name", parsed.wechat_name,
-                            sizeof(parsed.wechat_name), PP_PROFILE_WECHAT_NAME_CP,
-                            false, "contact.wechat.name", error, error_size) ||
-                !get_string(wechat, "id", parsed.wechat_id,
-                            sizeof(parsed.wechat_id), PP_PROFILE_WECHAT_ID_CP,
-                            false, "contact.wechat.id", error, error_size)) {
-                goto done;
-            }
-        }
-    }
 
-    if (!pp_profile_validate(&parsed, error, error_size)) goto done;
-    *profile = parsed;
+    if (!pp_profile_validate(parsed, error, error_size)) goto done;
+    *profile = *parsed;
     ok = true;
 
 done:
+    free(parsed);
     cJSON_Delete(root);
     return ok;
 }

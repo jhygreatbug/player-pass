@@ -5,8 +5,8 @@
 # Player Pass Personal Card
 
 Player Pass is a derivative FoloToy AI Passport application: a pocket electronic
-business card that shows a pixel avatar, profile text, game collection, contact
-codes, and a configurable NFC payload. All personal data lives on the device.
+business card that shows a pixel avatar, profile text, game collection, a generic
+contact list, and a configurable NFC payload. All personal data lives on the device.
 There is no cloud account, login, or OTA update. The management console provides a
 manual JSON export/import; there is no automatic backup.
 
@@ -31,20 +31,22 @@ footer with its available actions.
 
 ### Pages
 
-1. **Home** - 92 x 92 avatar frame, name, one-line introduction, three platform
-   rows (Steam / Switch / PSN) with their IDs and QR availability, and three
-   navigation rows (Games, Contact, NFC). Pressing OK on a platform shows its
-   uploaded QR code; pressing OK on a navigation row opens that page.
+1. **Home** - 92 x 92 avatar frame, name, one-line introduction, three display-only
+   platform rows (Steam / Switch / PSN) with their IDs, and three navigation rows
+   (Games, Contact, NFC). Pressing OK on a navigation row opens that page;
+   platform rows are not selectable.
 2. **Games** - one continuous list with two sections, "Favourite games" and
    "Playing". Each row shows one portrait cover, the title, and a short note.
    The list is rendered as a moving five-entry window, so the object count stays
    small even if the stored list is long. OK opens the game detail page.
-3. **Game detail** - 72 x 96 cover, title, group badge, Xiaoheihe link status,
+3. **Game detail** - 72 x 108 cover, title, group badge, game-link status,
    and introduction. If a link is configured, OK renders a QR code on the
    device for the phone to scan.
-4. **Contact** - Weibo, WeChat name, WeChat ID, WeChat QR, and WeChat payment
-   QR. Text values open a large read-only panel; QR entries open a 180 x 180
-   white QR page. QR codes are never all shown at once.
+4. **Contact** - a generic list of entries, each with a platform name, the
+   account on that platform, and an optional link. An entry with a link shows a
+   QR marker and renders a 180 x 180 QR code on demand; an entry without a link
+   opens a large read-only account panel instead. QR codes are never all shown
+   at once.
 5. **NFC** - the configured label, type, and payload. The NTAG213 is a passive
    tag with no MCU interface; the firmware displays the payload and can render a
    QR copy, but it cannot write the tag. Write it with an NFC-capable phone.
@@ -109,8 +111,8 @@ partition. NVS stores only Wi-Fi calibration data.
 | `factory` | app/factory | `0x10000` | `0x300000` | Single application image |
 | `storage` | data/littlefs | `0x310000` | `0x4F0000` | JSON records and images |
 
-The compressed application image in the delivery build is **2,120,592 bytes**
-(`0x205B90`). It fits the 3 MiB factory partition with 1,025,136 bytes (33%)
+The compressed application image in the delivery build is **2,121,392 bytes**
+(`0x205E70`). It fits the 3 MiB factory partition with 1,024,336 bytes (33%)
 free, which leaves room for font regeneration. The data partition is
 `0x4F0000` bytes (about 4.94 MiB). A blank LittleFS partition is formatted on
 first boot; a non-blank partition that fails to mount is reported as corrupt
@@ -197,7 +199,7 @@ On the device (not established by a build):
 - All three buttons: selection clamps, OK actions, long-OK back, double-OK on
   Home enters management mode.
 - Games sections and window scrolling; details; on-device QR generation.
-- Contact text panels and uploaded QR/payment images.
+- Contact list browsing, account panels, and QR generation from links.
 - NFC page and QR payload.
 - Management AP is visible, WPA2 protected, and the screen shows SSID/password/
   URL; repeated enter/exit cycles do not leak tasks or sockets.
@@ -213,22 +215,22 @@ On the device (not established by a build):
 
 ## Delivery status
 
-Recorded for `feature/personal-passport` on 2026-11-10. A successful build is
+Recorded for `feature/personal-passport` on 2026-11-11. A successful build is
 not hardware acceptance.
 
 | Item | Result |
 | --- | --- |
-| Build | PASS - ESP-IDF 5.5.3; application 2,120,592 bytes (`0x205B90`); merged image 2,186,128 bytes |
+| Build | PASS - ESP-IDF 5.5.3; application 2,121,392 bytes (`0x205E70`); merged image 2,186,928 bytes |
 | Host tests | PASS - `./tools/validate.sh --static` and the complete `./tools/validate.sh` |
 | Device tests | NOT RUN - no USB Serial/JTAG device was detected in this environment |
-| Unverified | display/backlight/font rendering; all three buttons and navigation; Wi-Fi AP visibility and WPA2; phone console access, lease/grace and manual exit; image upload and persistence; manual export/import; first-boot LittleFS format; battery readings; USB logs/flashing; phone cellular data behavior |
+| Unverified | display/backlight/font rendering; all three buttons and navigation; Wi-Fi AP visibility and WPA2; phone console access, lease/grace and manual exit; image upload and persistence; contact list editing and link-generated QR codes; manual export/import; first-boot LittleFS format; battery readings; USB logs/flashing; phone cellular data behavior |
 
 Merged image: `build/FoloToy-AI-Passport-full.bin`
 
-SHA-256: `bf76f44330f2913e2c29a21e4b08eb3a5095fa9cf8e49b2530610727aabe71e0`
+SHA-256: `5c43b0e1ac6d178c7a28963b9c1e7813c7b657305c9d04323c125c33c98a99df`
 
 Verified debug bundle:
-`build/firmware/bf76f44330f2913e2c29a21e4b08eb3a5095fa9cf8e49b2530610727aabe71e0/`
+`build/firmware/5c43b0e1ac6d178c7a28963b9c1e7813c7b657305c9d04323c125c33c98a99df/`
 
 ## Management page does not respond
 
@@ -274,9 +276,9 @@ captive-portal probe URL or assume the phone will open the page automatically.
 - Phone behaviour when the AP has no internet varies by OS. iOS usually keeps
   cellular data available; some Android devices route traffic through the AP and
   lose internet until it is disconnected. This is not verified for every model.
-- The web console never calls Xiaoheihe or any external service. Game links are
-  rendered as QR codes for the phone; cross-origin and anti-bot behaviour are
-  outside the firmware.
+- The web console never calls an external service. Game links are rendered as QR
+  codes for the phone; cross-origin and anti-bot behaviour are outside the
+  firmware. IGDB is only an outbound link in the cover editor.
 - The AP password is a fixed product password in the firmware. Anyone who knows it
   can join the AP; the console has no login. Rotate it by rebuilding the firmware.
 - Backup is manual JSON export/import only. There is no automatic backup, ZIP,

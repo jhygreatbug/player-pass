@@ -20,7 +20,7 @@
 #define PP_IMAGE_AVATAR_W 88u
 #define PP_IMAGE_AVATAR_H 88u
 #define PP_IMAGE_COVER_W 72u
-#define PP_IMAGE_COVER_H 96u
+#define PP_IMAGE_COVER_H 108u
 #define PP_IMAGE_QR_W 180u
 #define PP_IMAGE_QR_H 180u
 
@@ -39,7 +39,6 @@ typedef enum {
 typedef enum {
     PP_IMAGE_KIND_AVATAR = 0,
     PP_IMAGE_KIND_COVER,
-    PP_IMAGE_KIND_QR,
 } pp_image_kind_t;
 
 typedef struct {

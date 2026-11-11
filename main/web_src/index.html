@@ -72,7 +72,7 @@
         <h2><span class="accent"></span>使用提示</h2>
         <ul class="tips">
           <li>图片仅支持 JPG / PNG。浏览器会完成裁剪、压缩并转换为 RGB565，设备端不做解码。</li>
-          <li>手机连接设备热点时，部分 Android 机型会暂时切走移动数据；如果管理页可用但外部链接打不开，请先断开热点再访问小黑盒。</li>
+          <li>手机连接设备热点时，部分 Android 机型会暂时切走移动数据；如果管理页可用但外部链接打不开，请先断开热点再访问。</li>
           <li>NFC 为无源 NTAG213 标签，固件不能改写。请复制 NFC 内容，用支持 NFC 的手机写入标签。</li>
           <li>支持手动 JSON 导出/导入（含图片）；不提供自动备份、ZIP、历史版本或 OTA。导入不会自动回滚。</li>
         </ul>
@@ -110,41 +110,11 @@
 
     <div class="card">
       <h2><span class="accent"></span>图片</h2>
-      <p class="muted small">每个条目只保留一张图片。上传采用临时文件、校验、原子替换；失败时旧图片保留。</p>
+      <p class="muted small">头像会裁剪为正方形并保存到设备。联系方式的二维码由设备根据填写的链接生成，不需要上传图片。</p>
       <div class="image-grid" id="profile-images">
         <div class="image-card" data-slot="avatar" data-kind="avatar">
           <div class="image-title">头像 <span class="muted small">正方形 88×88</span></div>
           <div class="preview square"><canvas width="88" height="88"></canvas><span class="empty">未上传</span></div>
-          <input type="file" accept="image/jpeg,image/png" class="file-input">
-          <div class="image-actions">
-            <button type="button" class="btn small primary" data-action="upload">上传</button>
-            <button type="button" class="btn small ghost" data-action="remove">移除</button>
-          </div>
-          <div class="image-status muted small"></div>
-        </div>
-        <div class="image-card" data-slot="qr_steam" data-kind="qr">
-          <div class="image-title">Steam 二维码 <span class="muted small">保留比例 180×180</span></div>
-          <div class="preview square"><canvas width="180" height="180"></canvas><span class="empty">未上传</span></div>
-          <input type="file" accept="image/jpeg,image/png" class="file-input">
-          <div class="image-actions">
-            <button type="button" class="btn small primary" data-action="upload">上传</button>
-            <button type="button" class="btn small ghost" data-action="remove">移除</button>
-          </div>
-          <div class="image-status muted small"></div>
-        </div>
-        <div class="image-card" data-slot="qr_switch" data-kind="qr">
-          <div class="image-title">Switch 二维码 <span class="muted small">保留比例 180×180</span></div>
-          <div class="preview square"><canvas width="180" height="180"></canvas><span class="empty">未上传</span></div>
-          <input type="file" accept="image/jpeg,image/png" class="file-input">
-          <div class="image-actions">
-            <button type="button" class="btn small primary" data-action="upload">上传</button>
-            <button type="button" class="btn small ghost" data-action="remove">移除</button>
-          </div>
-          <div class="image-status muted small"></div>
-        </div>
-        <div class="image-card" data-slot="qr_psn" data-kind="qr">
-          <div class="image-title">PlayStation 二维码 <span class="muted small">保留比例 180×180</span></div>
-          <div class="preview square"><canvas width="180" height="180"></canvas><span class="empty">未上传</span></div>
           <input type="file" accept="image/jpeg,image/png" class="file-input">
           <div class="image-actions">
             <button type="button" class="btn small primary" data-action="upload">上传</button>
@@ -191,19 +161,21 @@
           <textarea id="g-note" maxlength="120" rows="3" placeholder="一两句话介绍这款游戏"></textarea>
           <span class="counter" data-counter-for="g-note"></span>
         </label>
-        <label class="field span-two">小黑盒链接
-          <input id="g-link" maxlength="480" placeholder="https://www.xiaoheihe.cn/...">
+        <label class="field span-two">通用链接
+          <input id="g-link" maxlength="480" placeholder="https://example.com/game">
+          <span class="muted small">可填写官网、商店页面等；设备会为它生成二维码。</span>
         </label>
       </div>
       <div class="cover-editor">
-        <div class="preview cover"><canvas id="g-cover" width="72" height="96"></canvas><span class="empty">无封面</span></div>
+        <div class="preview cover"><canvas id="g-cover" width="72" height="108"></canvas><span class="empty">无封面</span></div>
         <div>
           <input type="file" id="g-cover-file" accept="image/jpeg,image/png" class="file-input">
           <div class="image-actions">
             <button type="button" class="btn small primary" id="g-cover-upload" data-mutation>上传封面</button>
             <button type="button" class="btn small ghost" id="g-cover-remove" data-mutation>移除封面</button>
           </div>
-          <p class="muted small">竖版 3:4 裁剪，设备显示 72×96。先保存游戏到列表即可上传封面。</p>
+          <p class="muted small">竖版 2:3 裁剪，设备显示 72×108。先保存游戏到列表即可上传封面。</p>
+          <p class="muted small">找封面：<a class="text-link" href="https://www.igdb.com/" target="_blank" rel="noopener noreferrer">IGDB 游戏数据库 ↗</a>（需要外网；手机可先断开热点或使用电脑）。</p>
           <div class="image-status muted small" id="g-cover-status"></div>
         </div>
       </div>
@@ -215,52 +187,19 @@
   </section>
 
   <section class="tab-panel" id="tab-contact">
-    <form class="card editable" id="contact-form" autocomplete="off">
-      <h2><span class="accent"></span>联系方式</h2>
-      <div class="grid two">
-        <label class="field">微博账号
-          <input id="c-weibo-handle" data-path="contact.weibo.handle" maxlength="40" placeholder="@yourname">
-        </label>
-        <label class="field">微博链接（可选，用于生成二维码）
-          <input id="c-weibo-url" data-path="contact.weibo.url" maxlength="480" placeholder="https://weibo.com/u/...">
-        </label>
-        <label class="field">微信昵称
-          <input id="c-wechat-name" data-path="contact.wechat.name" maxlength="24" placeholder="小陈">
-        </label>
-        <label class="field">微信号
-          <input id="c-wechat-id" data-path="contact.wechat.id" maxlength="40" placeholder="wechat_id">
-        </label>
+    <div class="card editable">
+      <div class="card-head">
+        <h2><span class="accent"></span>联系方式</h2>
+        <div class="head-actions">
+          <button type="button" class="btn small primary" id="add-contact" data-mutation>新增联系方式</button>
+        </div>
       </div>
+      <p class="muted small">每条填写平台名称（如微博）、该平台下的账号，以及用于生成二维码的链接。链接可选：只有填写了链接的条目，设备才会显示二维码。</p>
+      <div class="contacts-list" id="contacts-list"></div>
+      <p class="empty-state hidden" id="contacts-empty">还没有联系方式。点击“新增联系方式”开始。</p>
       <div class="actions">
-        <button type="submit" class="btn primary" id="save-contact">保存联系方式</button>
+        <button type="button" class="btn primary" id="save-contacts" data-mutation>保存联系方式</button>
         <span class="dirty" id="contact-dirty"></span>
-      </div>
-    </form>
-
-    <div class="card">
-      <h2><span class="accent"></span>微信图片</h2>
-      <p class="muted small">二维码保留原始比例并放大到 180×180；收款码单独一张。每个条目只保留一张图片。</p>
-      <div class="image-grid" id="contact-images">
-        <div class="image-card" data-slot="qr_wechat" data-kind="qr">
-          <div class="image-title">微信二维码 <span class="muted small">180×180</span></div>
-          <div class="preview square"><canvas width="180" height="180"></canvas><span class="empty">未上传</span></div>
-          <input type="file" accept="image/jpeg,image/png" class="file-input">
-          <div class="image-actions">
-            <button type="button" class="btn small primary" data-action="upload">上传</button>
-            <button type="button" class="btn small ghost" data-action="remove">移除</button>
-          </div>
-          <div class="image-status muted small"></div>
-        </div>
-        <div class="image-card" data-slot="qr_wechat_pay" data-kind="qr">
-          <div class="image-title">微信收款码 <span class="muted small">180×180</span></div>
-          <div class="preview square"><canvas width="180" height="180"></canvas><span class="empty">未上传</span></div>
-          <input type="file" accept="image/jpeg,image/png" class="file-input">
-          <div class="image-actions">
-            <button type="button" class="btn small primary" data-action="upload">上传</button>
-            <button type="button" class="btn small ghost" data-action="remove">移除</button>
-          </div>
-          <div class="image-status muted small"></div>
-        </div>
       </div>
     </div>
   </section>
@@ -275,7 +214,7 @@
       </label>
       <div class="grid two">
         <label class="field">入口名称
-          <input id="n-label" maxlength="16" placeholder="例如：小黑盒主页">
+          <input id="n-label" maxlength="16" placeholder="例如：个人主页">
           <span class="counter" data-counter-for="n-label"></span>
         </label>
         <label class="field">类型

@@ -72,9 +72,7 @@ static void test_kinds(void)
     CHECK(pp_image_kind_dimensions(PP_IMAGE_KIND_AVATAR, &w, &h));
     CHECK(w == 88 && h == 88);
     CHECK(pp_image_kind_dimensions(PP_IMAGE_KIND_COVER, &w, &h));
-    CHECK(w == 72 && h == 96);
-    CHECK(pp_image_kind_dimensions(PP_IMAGE_KIND_QR, &w, &h));
-    CHECK(w == 180 && h == 180);
+    CHECK(w == 72 && h == 108);
     CHECK(pp_image_kind_file_bytes(PP_IMAGE_KIND_AVATAR) ==
           PP_IMAGE_HEADER_BYTES + 88u * 88u * 2u);
     CHECK(!pp_image_kind_dimensions((pp_image_kind_t)99, &w, &h));

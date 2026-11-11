@@ -10,31 +10,29 @@
 
 const SPECS = {
   avatar: { width: 88, height: 88, crop: 'square' },
-  cover: { width: 72, height: 96, crop: 'cover' },
-  qr: { width: 180, height: 180, crop: 'contain', padding: 10 },
+  cover: { width: 72, height: 108, crop: 'cover' },
 };
 
 const SLOT_FLAGS = {
   avatar: 'avatar',
-  qr_steam: 'steam_qr',
-  qr_switch: 'switch_qr',
-  qr_psn: 'psn_qr',
-  qr_wechat: 'wechat_qr',
-  qr_wechat_pay: 'wechat_pay_qr',
 };
 
 const FIXED_IMAGE_SLOTS = Object.keys(SLOT_FLAGS);
+// Platform and contact QR images were removed from the product; accept them in
+// older backups but do not restore them.
+const LEGACY_IMAGE_SLOTS = ['qr_steam', 'qr_switch', 'qr_psn', 'qr_wechat', 'qr_wechat_pay'];
 const BACKUP_FORMAT = 'playerpass-backup';
 const BACKUP_VERSION = 1;
 const BACKUP_MAX_BYTES = 16 * 1024 * 1024;
+const CONTACT_MAX = 8;
 
 const PROFILE_LIMITS = {
   name: 24,
   tagline: 60,
   platform: 40,
-  weiboHandle: 40,
-  wechatName: 24,
-  wechatId: 40,
+  contactPlatform: 16,
+  contactAccount: 40,
+  contactLink: 480,
 };
 
 const state = {
@@ -209,6 +207,7 @@ function setReadOnly(readonly) {
     node.disabled = readonly;
   });
   $('#retry-claim').disabled = false;
+  renderContacts();
 }
 
 function updateChips() {
@@ -451,29 +450,16 @@ function bayer4(x, y) {
   return matrix[(y & 3) * 4 + (x & 3)] / 16 - 0.5;
 }
 
-function encodeRgb565(imageData, dither, qrMode) {
+function encodeRgb565(imageData) {
   const { width, height, data } = imageData;
   const out = new Uint8Array(width * height * 2);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4;
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      if (qrMode) {
-        const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        const value = luminance < 145 ? 0x0000 : 0xffff;
-        out[(y * width + x) * 2] = value & 0xff;
-        out[(y * width + x) * 2 + 1] = value >> 8;
-        continue;
-      }
-      let rr = r, gg = g, bb = b;
-      if (dither) {
-        const delta = bayer4(x, y) * 10;
-        rr = clamp(r + delta, 0, 255);
-        gg = clamp(g + delta, 0, 255);
-        bb = clamp(b + delta, 0, 255);
-      }
+      const delta = bayer4(x, y) * 10;
+      const rr = clamp(data[i] + delta, 0, 255);
+      const gg = clamp(data[i + 1] + delta, 0, 255);
+      const bb = clamp(data[i + 2] + delta, 0, 255);
       const r5 = Math.round((rr * 31) / 255);
       const g6 = Math.round((gg * 63) / 255);
       const b5 = Math.round((bb * 31) / 255);
@@ -486,7 +472,7 @@ function encodeRgb565(imageData, dither, qrMode) {
 }
 
 function encodePpim(spec, imageData) {
-  const pixels = encodeRgb565(imageData, spec.crop !== 'contain', spec.crop === 'contain');
+  const pixels = encodeRgb565(imageData);
   const file = new Uint8Array(20 + pixels.length);
   file.set([0x50, 0x50, 0x49, 0x4d], 0);
   file[4] = 1;
@@ -540,13 +526,8 @@ async function processImage(file, kind) {
   canvas.width = spec.width;
   canvas.height = spec.height;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (spec.crop === 'contain') {
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, spec.width, spec.height);
-  } else {
-    ctx.fillStyle = '#141e30';
-    ctx.fillRect(0, 0, spec.width, spec.height);
-  }
+  ctx.fillStyle = '#141e30';
+  ctx.fillRect(0, 0, spec.width, spec.height);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
@@ -555,21 +536,13 @@ async function processImage(file, kind) {
   if (spec.crop === 'square') {
     const side = Math.min(sw, sh);
     ctx.drawImage(bitmap, (sw - side) / 2, (sh - side) / 2, side, side, 0, 0, spec.width, spec.height);
-  } else if (spec.crop === 'cover') {
+  } else {
     const targetRatio = spec.width / spec.height;
     let cw = sw;
     let ch = sh;
     if (sw / sh > targetRatio) cw = sh * targetRatio;
     else ch = sw / targetRatio;
     ctx.drawImage(bitmap, (sw - cw) / 2, (sh - ch) / 2, cw, ch, 0, 0, spec.width, spec.height);
-  } else {
-    const pad = spec.padding || 0;
-    const scale = Math.min((spec.width - pad * 2) / sw, (spec.height - pad * 2) / sh);
-    const dw = Math.max(1, Math.round(sw * scale));
-    const dh = Math.max(1, Math.round(sh * scale));
-    const dx = Math.round((spec.width - dw) / 2);
-    const dy = Math.round((spec.height - dh) / 2);
-    ctx.drawImage(bitmap, dx, dy, dw, dh);
   }
   if (bitmap.close) bitmap.close();
   const imageData = ctx.getImageData(0, 0, spec.width, spec.height);
@@ -724,7 +697,7 @@ let imageLoadGeneration = 0;
 
 async function loadInitialImages() {
   const generation = ++imageLoadGeneration;
-  const cards = $$('#profile-images .image-card, #contact-images .image-card');
+  const cards = $$('#profile-images .image-card');
   for (const card of cards) {
     if (generation !== imageLoadGeneration) return;
     const slot = card.dataset.slot;
@@ -741,11 +714,11 @@ async function loadInitialImages() {
 
 function defaultProfile() {
   return {
-    version: 1,
+    version: 2,
     name: '',
     tagline: '',
     platforms: { steam: { id: '' }, switch: { id: '' }, playstation: { id: '' } },
-    contact: { weibo: { handle: '', url: '' }, wechat: { name: '', id: '' } },
+    contacts: [],
     images: {},
   };
 }
@@ -781,9 +754,132 @@ function updateCounter(input) {
   counter.classList.toggle('over', max > 0 && count > max);
 }
 
+function contactControlsEnabled() {
+  return state.canEdit && !document.body.classList.contains('readonly');
+}
+
+function contactField(labelText, value, maxlength, placeholder, onInput) {
+  const label = el('label', 'field', labelText);
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = maxlength;
+  input.value = value || '';
+  input.placeholder = placeholder;
+  input.disabled = !contactControlsEnabled();
+  input.addEventListener('input', () => onInput(input.value));
+  label.append(input);
+  return { label, input };
+}
+
+function moveContact(index, delta) {
+  if (!requireEdit()) return;
+  const contacts = state.profile && state.profile.contacts;
+  const target = index + delta;
+  if (!contacts || target < 0 || target >= contacts.length) return;
+  const [contact] = contacts.splice(index, 1);
+  contacts.splice(target, 0, contact);
+  setDirty('profile', true);
+  renderContacts();
+}
+
+function removeContact(index) {
+  if (!requireEdit()) return;
+  const contacts = state.profile && state.profile.contacts;
+  if (!contacts || !contacts[index]) return;
+  contacts.splice(index, 1);
+  setDirty('profile', true);
+  renderContacts();
+}
+
+function addContact() {
+  if (!requireEdit()) return;
+  if (!state.profile) return;
+  if (!Array.isArray(state.profile.contacts)) state.profile.contacts = [];
+  if (state.profile.contacts.length >= CONTACT_MAX) {
+    toast(`联系方式最多 ${CONTACT_MAX} 条`, 'warn');
+    return;
+  }
+  state.profile.contacts.push({ platform: '', account: '', link: '' });
+  setDirty('profile', true);
+  renderContacts();
+}
+
+function renderContacts() {
+  const list = $('#contacts-list');
+  if (!list || !state.profile) return;
+  const contacts = Array.isArray(state.profile.contacts) ? state.profile.contacts : [];
+  list.replaceChildren();
+  $('#contacts-empty').classList.toggle('hidden', contacts.length > 0);
+  const add = $('#add-contact');
+  if (add) add.disabled = !contactControlsEnabled() || contacts.length >= CONTACT_MAX;
+
+  contacts.forEach((contact, index) => {
+    const card = el('div', 'contact-card');
+    const head = el('div', 'contact-card-head');
+    const hint = el('span', 'muted small', contact.link ? '将生成二维码' : '未填写链接');
+    const actions = el('div', 'contact-actions');
+    const up = el('button', 'btn small ghost', '↑');
+    const down = el('button', 'btn small ghost', '↓');
+    const del = el('button', 'btn small danger', '删除');
+    [up, down, del].forEach(button => {
+      button.type = 'button';
+      button.setAttribute('data-mutation', '');
+    });
+    const enabled = contactControlsEnabled();
+    up.disabled = !enabled || index === 0;
+    down.disabled = !enabled || index === contacts.length - 1;
+    del.disabled = !enabled;
+    up.addEventListener('click', () => moveContact(index, -1));
+    down.addEventListener('click', () => moveContact(index, 1));
+    del.addEventListener('click', () => removeContact(index));
+    actions.append(up, down, del);
+    head.append(el('span', 'contact-index', `#${index + 1}`), hint, actions);
+
+    const grid = el('div', 'grid two');
+    const platform = contactField(
+      '平台', contact.platform, PROFILE_LIMITS.contactPlatform, '例如：微博',
+      value => {
+        contact.platform = value;
+        setDirty('profile', true);
+      });
+    const account = contactField(
+      '账号', contact.account, PROFILE_LIMITS.contactAccount, '该平台下的账号或昵称',
+      value => {
+        contact.account = value;
+        setDirty('profile', true);
+      });
+    const link = contactField(
+      '链接（可选，用于生成二维码）', contact.link, PROFILE_LIMITS.contactLink, 'https://…',
+      value => {
+        contact.link = value;
+        hint.textContent = value.trim() ? '将生成二维码' : '未填写链接';
+        setDirty('profile', true);
+      });
+    link.label.classList.add('span-two');
+    grid.append(platform.label, account.label, link.label);
+    card.append(head, grid);
+    list.append(card);
+  });
+}
+
+function trimmedContacts() {
+  const contacts = state.profile && Array.isArray(state.profile.contacts)
+    ? state.profile.contacts : [];
+  return contacts.map((contact, index) => ({
+    index,
+    platform: (contact.platform || '').trim(),
+    account: (contact.account || '').trim(),
+    link: (contact.link || '').trim(),
+  }));
+}
+
+function filledContacts() {
+  return trimmedContacts().filter(contact => contact.platform || contact.account || contact.link);
+}
+
 function profilePayload() {
   return {
-    version: 1,
+    version: 2,
     name: state.profile.name || '',
     tagline: state.profile.tagline || '',
     platforms: {
@@ -791,16 +887,11 @@ function profilePayload() {
       switch: { id: state.profile.platforms.switch.id || '' },
       playstation: { id: state.profile.platforms.playstation.id || '' },
     },
-    contact: {
-      weibo: {
-        handle: state.profile.contact.weibo.handle || '',
-        url: state.profile.contact.weibo.url || '',
-      },
-      wechat: {
-        name: state.profile.contact.wechat.name || '',
-        id: state.profile.contact.wechat.id || '',
-      },
-    },
+    contacts: filledContacts().map(contact => ({
+      platform: contact.platform,
+      account: contact.account,
+      link: contact.link,
+    })),
   };
 }
 
@@ -809,11 +900,23 @@ function validateProfileClient(payload) {
   if (codePoints(payload.tagline) > PROFILE_LIMITS.tagline) return '一句话介绍不能超过 60 个字';
   const ids = [payload.platforms.steam.id, payload.platforms.switch.id, payload.platforms.playstation.id];
   if (ids.some(id => codePoints(id) > PROFILE_LIMITS.platform)) return '平台 ID 不能超过 40 个字';
-  if (codePoints(payload.contact.weibo.handle) > PROFILE_LIMITS.weiboHandle) return '微博账号不能超过 40 个字';
-  if (codePoints(payload.contact.wechat.name) > PROFILE_LIMITS.wechatName) return '微信昵称不能超过 24 个字';
-  if (codePoints(payload.contact.wechat.id) > PROFILE_LIMITS.wechatId) return '微信号不能超过 40 个字';
-  if (payload.contact.weibo.url && !/^https?:\/\/\S+$/i.test(payload.contact.weibo.url)) {
-    return '微博链接必须以 http:// 或 https:// 开头';
+  const contacts = filledContacts();
+  if (contacts.length > CONTACT_MAX) return `联系方式最多 ${CONTACT_MAX} 条`;
+  for (const contact of contacts) {
+    const label = `第 ${contact.index + 1} 条联系方式`;
+    if (!contact.platform) return `${label}需要填写平台`;
+    if (codePoints(contact.platform) > PROFILE_LIMITS.contactPlatform) {
+      return `${label}的平台不能超过 ${PROFILE_LIMITS.contactPlatform} 个字`;
+    }
+    if (codePoints(contact.account) > PROFILE_LIMITS.contactAccount) {
+      return `${label}的账号不能超过 ${PROFILE_LIMITS.contactAccount} 个字`;
+    }
+    if (contact.link && !/^https?:\/\/\S+$/i.test(contact.link)) {
+      return `${label}的链接必须以 http:// 或 https:// 开头`;
+    }
+    if (contact.link && new TextEncoder().encode(contact.link).length > PROFILE_LIMITS.contactLink) {
+      return `${label}的链接不能超过 ${PROFILE_LIMITS.contactLink} 字节`;
+    }
   }
   return null;
 }
@@ -852,12 +955,13 @@ async function saveProfile() {
     { label: 'Steam ID', text: payload.platforms.steam.id },
     { label: 'Switch ID', text: payload.platforms.switch.id },
     { label: 'PlayStation ID', text: payload.platforms.playstation.id },
-    { label: '微博账号', text: payload.contact.weibo.handle },
-    { label: '微博链接', text: payload.contact.weibo.url },
-    { label: '微信昵称', text: payload.contact.wechat.name },
-    { label: '微信号', text: payload.contact.wechat.id },
   ];
-  try {
+  filledContacts().forEach(contact => {
+    const number = contact.index + 1;
+    entries.push({ label: `联系方式${number}平台`, text: contact.platform });
+    entries.push({ label: `联系方式${number}账号`, text: contact.account });
+    entries.push({ label: `联系方式${number}链接`, text: contact.link });
+  });  try {
     const bad = await validateTexts(entries);
     if (bad.length) {
       toast(bad[0], 'error');
@@ -865,7 +969,10 @@ async function saveProfile() {
     }
     const reply = await api('/api/profile', { method: 'PUT', body: payload, token: state.token });
     state.profile = reply;
+    if (!state.profile.images) state.profile.images = {};
+    if (!Array.isArray(state.profile.contacts)) state.profile.contacts = [];
     fillProfileForm();
+    renderContacts();
     setDirty('profile', false);
     loadInitialImages();
     toast('资料已保存到设备');
@@ -917,7 +1024,7 @@ function renderGames() {
     const card = el('div', 'game-card');
     const cover = el('div', 'game-cover');
     const canvas = document.createElement('canvas');
-    canvas.width = 54;
+    canvas.width = 48;
     canvas.height = 72;
     cover.append(canvas, el('span', 'placeholder', '无封面'));
     const main = el('div', 'game-main');
@@ -927,7 +1034,7 @@ function renderGames() {
     );
     const meta = el('div', 'game-meta');
     const badge = el('span', `group-badge ${game.group === 'playing' ? 'playing' : ''}`, groupLabel(game.group));
-    meta.append(badge, el('span', 'muted small', game.link ? '已设置小黑盒链接' : '未设置链接'));
+    meta.append(badge, el('span', 'muted small', game.link ? '已设置链接' : '未设置链接'));
     main.append(meta);
     const actions = el('div', 'game-actions');
     const up = el('button', 'btn small ghost', '↑');
@@ -1045,7 +1152,7 @@ function saveEditorToList() {
     return;
   }
   if (link && !/^https?:\/\/\S+$/i.test(link)) {
-    toast('小黑盒链接必须以 http:// 或 https:// 开头', 'error');
+    toast('通用链接必须以 http:// 或 https:// 开头', 'error');
     return;
   }
   game.title = title;
@@ -1073,7 +1180,7 @@ async function saveGames() {
   state.games.forEach(game => {
     entries.push({ label: `游戏名称「${game.title}」`, text: game.title });
     entries.push({ label: `游戏介绍「${game.title}」`, text: game.note });
-    entries.push({ label: `小黑盒链接「${game.title}」`, text: game.link });
+    entries.push({ label: `通用链接「${game.title}」`, text: game.link });
   });
   try {
     const bad = await validateTexts(entries);
@@ -1304,14 +1411,35 @@ async function exportBackup() {
   }
 }
 
+function contactsFromBackup(value) {
+  if (Array.isArray(value.contacts)) {
+    return value.contacts
+      .filter(contact => contact && typeof contact === 'object')
+      .slice(0, CONTACT_MAX)
+      .map(contact => ({
+        platform: contact.platform || '',
+        account: contact.account || '',
+        link: contact.link || '',
+      }));
+  }
+  // v1 backups stored fixed Weibo/WeChat fields; convert them to entries.
+  const legacy = value.contact || {};
+  const out = [];
+  const weibo = legacy.weibo || {};
+  if (weibo.handle || weibo.url) {
+    out.push({ platform: '微博', account: weibo.handle || '', link: weibo.url || '' });
+  }
+  const wechat = legacy.wechat || {};
+  if (wechat.name) out.push({ platform: '微信', account: wechat.name, link: '' });
+  if (wechat.id) out.push({ platform: '微信号', account: wechat.id, link: '' });
+  return out.slice(0, CONTACT_MAX);
+}
+
 function profileFromBackup(profile) {
   const value = profile || {};
   const platforms = value.platforms || {};
-  const contact = value.contact || {};
-  const weibo = contact.weibo || {};
-  const wechat = contact.wechat || {};
   return {
-    version: 1,
+    version: 2,
     name: value.name || '',
     tagline: value.tagline || '',
     platforms: {
@@ -1319,10 +1447,7 @@ function profileFromBackup(profile) {
       switch: { id: (platforms.switch && platforms.switch.id) || '' },
       playstation: { id: (platforms.playstation && platforms.playstation.id) || '' },
     },
-    contact: {
-      weibo: { handle: weibo.handle || '', url: weibo.url || '' },
-      wechat: { name: wechat.name || '', id: wechat.id || '' },
-    },
+    contacts: contactsFromBackup(value),
   };
 }
 
@@ -1339,8 +1464,9 @@ function validateBackup(backup) {
   }
   for (const [slot, data] of Object.entries(backup.images)) {
     const fixed = FIXED_IMAGE_SLOTS.includes(slot);
+    const legacy = LEGACY_IMAGE_SLOTS.includes(slot);
     const game = /^games\/[a-z0-9-]{4,24}$/.test(slot);
-    if (!fixed && !game) throw new Error(`备份包含未知图片槽位：${slot}`);
+    if (!fixed && !legacy && !game) throw new Error(`备份包含未知图片槽位：${slot}`);
     if (typeof data !== 'string') throw new Error(`图片槽位 ${slot} 的数据无效`);
   }
 }
@@ -1397,17 +1523,18 @@ async function importBackup() {
       { label: 'Steam ID', text: profile.platforms.steam.id },
       { label: 'Switch ID', text: profile.platforms.switch.id },
       { label: 'PlayStation ID', text: profile.platforms.playstation.id },
-      { label: '微博账号', text: profile.contact.weibo.handle },
-      { label: '微博链接', text: profile.contact.weibo.url },
-      { label: '微信昵称', text: profile.contact.wechat.name },
-      { label: '微信号', text: profile.contact.wechat.id },
       { label: 'NFC 名称', text: backup.nfc.label },
       { label: 'NFC 内容', text: backup.nfc.content },
     ];
+    profile.contacts.forEach((contact, index) => {
+      textEntries.push({ label: `联系方式${index + 1}平台`, text: contact.platform });
+      textEntries.push({ label: `联系方式${index + 1}账号`, text: contact.account });
+      textEntries.push({ label: `联系方式${index + 1}链接`, text: contact.link });
+    });
     for (const game of backup.games.games) {
       textEntries.push({ label: `游戏名称「${game.title}」`, text: game.title });
       textEntries.push({ label: `游戏介绍「${game.title}」`, text: game.note || '' });
-      textEntries.push({ label: `小黑盒链接「${game.title}」`, text: game.link || '' });
+      textEntries.push({ label: `通用链接「${game.title}」`, text: game.link || '' });
     }
     status.textContent = '正在校验文字与字体…';
     const badText = await validateTexts(textEntries);
@@ -1465,7 +1592,9 @@ async function loadProfile() {
   try {
     state.profile = await api('/api/profile');
     if (!state.profile.images) state.profile.images = {};
+    if (!Array.isArray(state.profile.contacts)) state.profile.contacts = [];
     fillProfileForm();
+    renderContacts();
     loadInitialImages();
     state.loaded = true;
   } catch (error) {
@@ -1506,10 +1635,8 @@ function setupForms() {
     event.preventDefault();
     saveProfile();
   });
-  $('#contact-form').addEventListener('submit', event => {
-    event.preventDefault();
-    saveProfile();
-  });
+  $('#add-contact').addEventListener('click', addContact);
+  $('#save-contacts').addEventListener('click', saveProfile);
   $('#nfc-form').addEventListener('submit', event => {
     event.preventDefault();
     saveNfc();
@@ -1582,7 +1709,7 @@ function setupForms() {
   });
   window.addEventListener('pagehide', releaseSession);
 
-  $$('#profile-images .image-card, #contact-images .image-card').forEach(setupImageCard);
+  $$('#profile-images .image-card').forEach(setupImageCard);
   $$('[data-counter-for]').forEach(counter => {
     const input = $(`#${counter.dataset.counterFor}`);
     if (input) updateCounter(input);

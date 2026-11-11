@@ -9,17 +9,7 @@ static const struct {
     const char *rel;
 } SLOTS[] = {
     { "avatar", PP_IMAGE_SLOT_AVATAR, "img/avatar.bin" },
-    { "qr_steam", PP_IMAGE_SLOT_QR_STEAM, "img/qr_steam.bin" },
-    { "qr_switch", PP_IMAGE_SLOT_QR_SWITCH, "img/qr_switch.bin" },
-    { "qr_psn", PP_IMAGE_SLOT_QR_PSN, "img/qr_psn.bin" },
-    { "qr_wechat", PP_IMAGE_SLOT_QR_WECHAT, "img/qr_wechat.bin" },
-    { "qr_wechat_pay", PP_IMAGE_SLOT_QR_WECHAT_PAY, "img/qr_wechat_pay.bin" },
 };
-
-static bool profile_slot(pp_image_slot_t slot)
-{
-    return slot >= PP_IMAGE_SLOT_AVATAR && slot <= PP_IMAGE_SLOT_QR_WECHAT_PAY;
-}
 
 bool pp_image_slot_parse(const char *name, pp_image_slot_info_t *info)
 {
@@ -28,8 +18,7 @@ bool pp_image_slot_parse(const char *name, pp_image_slot_info_t *info)
     for (size_t i = 0; i < sizeof(SLOTS) / sizeof(SLOTS[0]); ++i) {
         if (strcmp(name, SLOTS[i].name) != 0) continue;
         info->slot = SLOTS[i].slot;
-        info->kind = info->slot == PP_IMAGE_SLOT_AVATAR ? PP_IMAGE_KIND_AVATAR
-                                                         : PP_IMAGE_KIND_QR;
+        info->kind = PP_IMAGE_KIND_AVATAR;
         return true;
     }
     if (strncmp(name, "games/", 6) == 0) {
@@ -68,13 +57,6 @@ bool pp_image_avatar_path(char *rel, size_t rel_size)
     return pp_image_slot_path(&info, rel, rel_size);
 }
 
-bool pp_image_profile_qr_path(pp_image_slot_t slot, char *rel, size_t rel_size)
-{
-    if (!profile_slot(slot) || slot == PP_IMAGE_SLOT_AVATAR) return false;
-    const pp_image_slot_info_t info = { .slot = slot, .kind = PP_IMAGE_KIND_QR };
-    return pp_image_slot_path(&info, rel, rel_size);
-}
-
 bool pp_image_cover_path(const char *game_id, char *rel, size_t rel_size)
 {
     if (!pp_game_id_valid(game_id)) return false;
@@ -105,35 +87,14 @@ pp_storage_err_t pp_image_profile_flags(const pp_storage_t *storage,
 {
     if (!storage || !images) return PP_STORAGE_ERR_INVALID;
     pp_profile_images_clear(images);
-    const pp_image_slot_t slots[] = {
-        PP_IMAGE_SLOT_AVATAR,       PP_IMAGE_SLOT_QR_STEAM,
-        PP_IMAGE_SLOT_QR_SWITCH,    PP_IMAGE_SLOT_QR_PSN,
-        PP_IMAGE_SLOT_QR_WECHAT,    PP_IMAGE_SLOT_QR_WECHAT_PAY,
-    };
-    for (size_t i = 0; i < sizeof(slots) / sizeof(slots[0]); ++i) {
-        char rel[PP_STORAGE_PATH_MAX];
-        if (!pp_image_profile_qr_path(slots[i], rel, sizeof(rel))) {
-            if (slots[i] == PP_IMAGE_SLOT_AVATAR) {
-                if (!pp_image_avatar_path(rel, sizeof(rel))) {
-                    return PP_STORAGE_ERR_INVALID;
-                }
-            } else {
-                return PP_STORAGE_ERR_INVALID;
-            }
-        }
-        bool present = false;
-        const pp_storage_err_t err = check(storage, rel, &present);
-        if (err != PP_STORAGE_OK) return err;
-        switch (slots[i]) {
-        case PP_IMAGE_SLOT_AVATAR: images->avatar = present; break;
-        case PP_IMAGE_SLOT_QR_STEAM: images->steam_qr = present; break;
-        case PP_IMAGE_SLOT_QR_SWITCH: images->switch_qr = present; break;
-        case PP_IMAGE_SLOT_QR_PSN: images->psn_qr = present; break;
-        case PP_IMAGE_SLOT_QR_WECHAT: images->wechat_qr = present; break;
-        case PP_IMAGE_SLOT_QR_WECHAT_PAY: images->wechat_pay_qr = present; break;
-        default: break;
-        }
+    char rel[PP_STORAGE_PATH_MAX];
+    if (!pp_image_avatar_path(rel, sizeof(rel))) {
+        return PP_STORAGE_ERR_INVALID;
     }
+    bool present = false;
+    const pp_storage_err_t err = check(storage, rel, &present);
+    if (err != PP_STORAGE_OK) return err;
+    images->avatar = present;
     return PP_STORAGE_OK;
 }
 

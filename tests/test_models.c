@@ -16,11 +16,17 @@ static void profile_fixture(pp_profile_t *profile)
     snprintf(profile->steam_id, sizeof(profile->steam_id), "76561198000000000");
     snprintf(profile->switch_id, sizeof(profile->switch_id), "SW-1234-5678-9012");
     snprintf(profile->psn_id, sizeof(profile->psn_id), "player_pass");
-    snprintf(profile->weibo_handle, sizeof(profile->weibo_handle), "@playerpass");
-    snprintf(profile->weibo_url, sizeof(profile->weibo_url),
+    profile->contact_count = 2;
+    snprintf(profile->contacts[0].platform,
+             sizeof(profile->contacts[0].platform), "微博");
+    snprintf(profile->contacts[0].account,
+             sizeof(profile->contacts[0].account), "@playerpass");
+    snprintf(profile->contacts[0].link, sizeof(profile->contacts[0].link),
              "https://weibo.com/u/1234567890");
-    snprintf(profile->wechat_name, sizeof(profile->wechat_name), "小陈");
-    snprintf(profile->wechat_id, sizeof(profile->wechat_id), "player_pass_wx");
+    snprintf(profile->contacts[1].platform,
+             sizeof(profile->contacts[1].platform), "微信");
+    snprintf(profile->contacts[1].account,
+             sizeof(profile->contacts[1].account), "player_pass_wx");
 }
 
 static void test_profile_roundtrip(void)
@@ -48,17 +54,18 @@ static void test_profile_roundtrip(void)
     CHECK_STR_EQ(parsed.steam_id, profile.steam_id);
     CHECK_STR_EQ(parsed.switch_id, profile.switch_id);
     CHECK_STR_EQ(parsed.psn_id, profile.psn_id);
-    CHECK_STR_EQ(parsed.weibo_handle, profile.weibo_handle);
-    CHECK_STR_EQ(parsed.weibo_url, profile.weibo_url);
-    CHECK_STR_EQ(parsed.wechat_name, profile.wechat_name);
-    CHECK_STR_EQ(parsed.wechat_id, profile.wechat_id);
+    CHECK(parsed.contact_count == 2);
+    CHECK_STR_EQ(parsed.contacts[0].platform, "微博");
+    CHECK_STR_EQ(parsed.contacts[0].account, "@playerpass");
+    CHECK_STR_EQ(parsed.contacts[0].link, "https://weibo.com/u/1234567890");
+    CHECK_STR_EQ(parsed.contacts[1].platform, "微信");
+    CHECK_STR_EQ(parsed.contacts[1].account, "player_pass_wx");
+    CHECK_STR_EQ(parsed.contacts[1].link, "");
     cJSON_free(json);
 
     pp_profile_images_t images;
     pp_profile_images_clear(&images);
     images.avatar = true;
-    images.steam_qr = true;
-    images.wechat_pay_qr = true;
     json = pp_profile_to_json(&profile, &images);
     CHECK(json != NULL);
     if (json) {
@@ -66,8 +73,6 @@ static void test_profile_roundtrip(void)
         cJSON *flags = cJSON_GetObjectItemCaseSensitive(root, "images");
         CHECK(cJSON_IsObject(flags));
         CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(flags, "avatar")));
-        CHECK(cJSON_IsFalse(
-            cJSON_GetObjectItemCaseSensitive(flags, "switch_qr")));
         cJSON_Delete(root);
         cJSON_free(json);
     }
@@ -83,15 +88,25 @@ static void test_profile_validation(void)
     CHECK(pp_profile_validate(&profile, error, sizeof(error)));
 
     profile_fixture(&profile);
-    profile.weibo_url[0] = '\0';
+    profile.contacts[0].link[0] = '\0';
     CHECK(pp_profile_validate(&profile, error, sizeof(error)));
 
     profile_fixture(&profile);
-    snprintf(profile.weibo_url, sizeof(profile.weibo_url), "ftp://example.com");
+    snprintf(profile.contacts[0].link, sizeof(profile.contacts[0].link),
+             "ftp://example.com");
     CHECK(!pp_profile_validate(&profile, error, sizeof(error)));
-    snprintf(profile.weibo_url, sizeof(profile.weibo_url),
+    snprintf(profile.contacts[0].link, sizeof(profile.contacts[0].link),
              "https://example.com/a b");
     CHECK(!pp_profile_validate(&profile, error, sizeof(error)));
+
+    profile_fixture(&profile);
+    profile.contacts[0].platform[0] = '\0';
+    CHECK(!pp_profile_validate(&profile, error, sizeof(error)));
+    CHECK(strstr(error, "platform") != NULL);
+    profile_fixture(&profile);
+    profile.contact_count = PP_PROFILE_CONTACT_MAX + 1;
+    CHECK(!pp_profile_validate(&profile, error, sizeof(error)));
+    CHECK(strstr(error, "contacts") != NULL);
 
     profile_fixture(&profile);
     memset(profile.name, 'A', PP_PROFILE_NAME_CP + 1);
@@ -119,15 +134,43 @@ static void test_profile_json_errors(void)
     char error[128];
     CHECK(!pp_profile_from_json("not json", &profile, error, sizeof(error)));
     CHECK(!pp_profile_from_json("[]", &profile, error, sizeof(error)));
-    CHECK(!pp_profile_from_json("{\"version\":2}", &profile, error,
+    CHECK(!pp_profile_from_json("{\"version\":3}", &profile, error,
                                 sizeof(error)));
-    CHECK(!pp_profile_from_json("{\"version\":1,\"name\":123}", &profile, error,
+    CHECK(!pp_profile_from_json("{\"version\":1.5}", &profile, error,
                                 sizeof(error)));
-    CHECK(pp_profile_from_json("{\"version\":1}", &profile, error,
+    CHECK(!pp_profile_from_json("{\"version\":2,\"name\":123}", &profile, error,
+                                sizeof(error)));
+    CHECK(pp_profile_from_json("{\"version\":2}", &profile, error,
                                sizeof(error)));
+    CHECK(!pp_profile_from_json("{\"version\":2,\"contacts\":{}}", &profile,
+                                error, sizeof(error)));
     CHECK(!pp_profile_from_json(
-        "{\"version\":1,\"contact\":{\"weibo\":{\"url\":\"javascript:x\"}}}",
+        "{\"version\":2,\"contacts\":[{\"account\":\"x\"}]}", &profile, error,
+        sizeof(error)));
+    CHECK(!pp_profile_from_json(
+        "{\"version\":2,\"contacts\":[{\"platform\":\"微博\","
+        "\"link\":\"javascript:x\"}]}",
         &profile, error, sizeof(error)));
+}
+
+static void test_profile_legacy_migration(void)
+{
+    const char *json =
+        "{\"version\":1,\"name\":\"旧名片\",\"contact\":{"
+        "\"weibo\":{\"handle\":\"@old\",\"url\":\"https://weibo.com/u/1\"},"
+        "\"wechat\":{\"name\":\"小陈\",\"id\":\"old_wx\"}}}";
+    pp_profile_t profile;
+    char error[128];
+    CHECK(pp_profile_from_json(json, &profile, error, sizeof(error)));
+    CHECK(profile.contact_count == 3);
+    CHECK_STR_EQ(profile.contacts[0].platform, "微博");
+    CHECK_STR_EQ(profile.contacts[0].account, "@old");
+    CHECK_STR_EQ(profile.contacts[0].link, "https://weibo.com/u/1");
+    CHECK_STR_EQ(profile.contacts[1].platform, "微信");
+    CHECK_STR_EQ(profile.contacts[1].account, "小陈");
+    CHECK_STR_EQ(profile.contacts[1].link, "");
+    CHECK_STR_EQ(profile.contacts[2].platform, "微信号");
+    CHECK_STR_EQ(profile.contacts[2].account, "old_wx");
 }
 
 static void game_fixture(pp_game_t *game, const char *id, const char *title,
@@ -137,7 +180,7 @@ static void game_fixture(pp_game_t *game, const char *id, const char *title,
     snprintf(game->id, sizeof(game->id), "%s", id);
     snprintf(game->title, sizeof(game->title), "%s", title);
     snprintf(game->note, sizeof(game->note), "%s 的简短介绍", title);
-    snprintf(game->link, sizeof(game->link), "https://www.xiaoheihe.cn/app/%s",
+    snprintf(game->link, sizeof(game->link), "https://example.com/game/%s",
              id);
     game->group = group;
 }
@@ -245,11 +288,11 @@ static void test_nfc(void)
     char error[128];
     CHECK(pp_nfc_validate(&nfc, error, sizeof(error)));
 
-    snprintf(nfc.label, sizeof(nfc.label), "小黑盒");
+    snprintf(nfc.label, sizeof(nfc.label), "Homepage");
     nfc.enabled = true;
     nfc.type = PP_NFC_TYPE_URL;
     snprintf(nfc.content, sizeof(nfc.content),
-             "https://www.xiaoheihe.cn/app/user/profile");
+             "https://example.com/user");
     CHECK(pp_nfc_validate(&nfc, error, sizeof(error)));
 
     char *json = pp_nfc_to_json(&nfc);
@@ -287,6 +330,7 @@ int main(void)
     test_profile_roundtrip();
     test_profile_validation();
     test_profile_json_errors();
+    test_profile_legacy_migration();
     test_games_order_and_roundtrip();
     test_games_validation();
     test_nfc();

@@ -13,17 +13,12 @@ required.
 ```text
 /lfs/
   data/
-    profile.json        profile text and contact text
+    profile.json        profile text and generic contact list
     games.json          game list, normalized to favourites then playing
     nfc.json            NFC label, type, and payload
   img/
     avatar.bin          88 x 88
-    qr_steam.bin        180 x 180
-    qr_switch.bin       180 x 180
-    qr_psn.bin          180 x 180
-    qr_wechat.bin       180 x 180
-    qr_wechat_pay.bin   180 x 180
-    games/<game-id>.bin 72 x 96
+    games/<game-id>.bin 72 x 108
 ```
 
 Image presence is derived from the filesystem. A JSON record never stores a
@@ -52,8 +47,7 @@ size the UI displays.
 | Slot kind | Dimensions | Complete file bytes |
 | --- | --- | ---: |
 | Avatar | 88 x 88 | 15,508 |
-| Game cover | 72 x 96 | 13,844 |
-| QR | 180 x 180 | 64,820 |
+| Game cover | 72 x 108 | 15,572 |
 
 The upload endpoint requires the exact byte length for the slot, validates the
 header and dimensions, streams to `<name>.tmp`, computes the CRC, and only then
@@ -74,7 +68,7 @@ history versions.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "name": "Player One",
   "tagline": "Plays a little every day.",
   "platforms": {
@@ -82,17 +76,23 @@ history versions.
     "switch": { "id": "SW-0000-0000-0000" },
     "playstation": { "id": "player_one" }
   },
-  "contact": {
-    "weibo": { "handle": "@player_one", "url": "https://weibo.com/u/0" },
-    "wechat": { "name": "Player", "id": "player_one" }
-  }
+  "contacts": [
+    { "platform": "Weibo", "account": "@player_one", "link": "https://weibo.com/u/0" },
+    { "platform": "WeChat", "account": "player_one", "link": "" }
+  ]
 }
 ```
 
-Limits are code points: name 24, tagline 60 (newlines allowed), each platform ID
-40, Weibo handle 40, WeChat name 24, WeChat ID 40. URLs must start with
-`http://` or `https://`, contain no spaces or control bytes, and fit in 480
-bytes.
+Contacts are a generic list: each entry is an arbitrary platform name, the
+account on that platform, and an optional link. The device generates a QR code
+from the link; an entry without a link shows no QR code. Limits are code points:
+name 24, tagline 60 (newlines allowed), each platform ID 40, up to 8 contacts,
+each platform 16, account 40. Links must start with `http://` or `https://`,
+contain no spaces or control bytes, and fit in 480 bytes.
+
+Version 1 files stored fixed `contact.weibo` / `contact.wechat` objects. They are
+converted on load into generic contacts, and the next save writes version 2.
+Uploaded QR images from older builds are no longer read or shown.
 
 ### games.json
 
@@ -105,7 +105,7 @@ bytes.
       "title": "A Game",
       "group": "favorite",
       "note": "Short note",
-      "link": "https://www.xiaoheihe.cn/app/..."
+      "link": "https://example.com/game"
     }
   ]
 }
@@ -160,8 +160,8 @@ carry `Content-Length`; the server rejects chunked or missing lengths.
 | DELETE | `/api/images/<slot>` | token | Remove an image |
 | POST | `/api/validate-text` | no | Check font coverage for up to 8 strings |
 
-Slots: `avatar`, `qr_steam`, `qr_switch`, `qr_psn`, `qr_wechat`,
-`qr_wechat_pay`, and `games/<game-id>`.
+Slots: `avatar` and `games/<game-id>`. Contact QR codes are generated on the
+device from the contact link and are not uploadable images.
 
 ### Claim
 
@@ -272,11 +272,11 @@ replaces unsupported characters with `?` and logs `U+XXXX`.
 
 ## Image upload pipeline
 
-1. Browser validates JPG/PNG (WebP and GIF are rejected), orients, crops:
-   avatar square, cover 3:4 portrait, QR contained with white padding.
-2. Browser draws at 88 x 88, 72 x 96, or 180 x 180, converts to RGB565
-   little-endian with ordered dithering (photos) or a luminance threshold (QR),
-   computes CRC32, and sends `application/octet-stream` with the exact length.
+1. Browser validates JPG/PNG (WebP and GIF are rejected), orients, and crops:
+   avatar square, cover 2:3 portrait.
+2. Browser draws at 88 x 88 or 72 x 108, converts to RGB565 little-endian
+   with ordered dithering, computes CRC32, and sends `application/octet-stream`
+   with the exact length.
 3. Server verifies slot, token, type, length, free space, then reads the header
    and streams pixels to a temporary file while computing CRC.
 4. On success it swaps the file, refreshes image flags, and returns the new
@@ -298,7 +298,13 @@ downloads one JSON file:
   "format": "playerpass-backup",
   "version": 1,
   "exported_at": "2026-11-11T12:00:00.000Z",
-  "profile": { "version": 1, "name": "Player One" },
+  "profile": {
+    "version": 2,
+    "name": "Player One",
+    "contacts": [
+      { "platform": "Weibo", "account": "@player_one", "link": "https://weibo.com/u/0" }
+    ]
+  },
   "games": { "version": 1, "games": [] },
   "nfc": { "version": 1, "enabled": false },
   "images": {
@@ -316,7 +322,9 @@ downloads one JSON file:
   deleted, so the result matches the backup.
 - The browser accepts files up to 16 MB. Import stops at the first error and
   has no automatic rollback; export the current state before importing.
-- Slot names are exactly those accepted by the image API.
+- Slot names are exactly those accepted by the image API. Legacy `qr_steam`,
+  `qr_switch`, `qr_psn`, `qr_wechat`, and `qr_wechat_pay` slots in older
+  backups are accepted but ignored on import.
 
 ## Error responses
 
@@ -348,6 +356,6 @@ rebuilding the firmware. NVS holds Wi-Fi calibration only.
 The AP has no upstream internet connection. iOS usually keeps cellular data
 available while joined to an AP without internet; some Android versions route
 all traffic through the AP and block internet until the AP is disconnected. The
-console works entirely offline, but Xiaoheihe links opened from the phone may
+console works entirely offline, but external links opened from the phone may
 require disconnecting the AP first. This behaviour is documented as unverified
 until tested on the user's phones.

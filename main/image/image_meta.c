@@ -114,10 +114,6 @@ bool pp_image_kind_dimensions(pp_image_kind_t kind, uint16_t *width,
         w = PP_IMAGE_COVER_W;
         h = PP_IMAGE_COVER_H;
         break;
-    case PP_IMAGE_KIND_QR:
-        w = PP_IMAGE_QR_W;
-        h = PP_IMAGE_QR_H;
-        break;
     default:
         return false;
     }

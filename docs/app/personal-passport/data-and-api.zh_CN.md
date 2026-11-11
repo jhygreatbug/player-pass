@@ -11,17 +11,12 @@
 ```text
 /lfs/
   data/
-    profile.json        个人资料与联系方式文字
+    profile.json        个人资料与通用联系方式列表
     games.json          游戏列表，按“喜欢 → 正在玩”归一化
     nfc.json            NFC 标题、类型与内容
   img/
     avatar.bin          88 × 88
-    qr_steam.bin        180 × 180
-    qr_switch.bin       180 × 180
-    qr_psn.bin          180 × 180
-    qr_wechat.bin       180 × 180
-    qr_wechat_pay.bin   180 × 180
-    games/<game-id>.bin 72 × 96
+    games/<game-id>.bin 72 × 108
 ```
 
 图片是否存在由文件系统决定。JSON 不保存可能失效的路径或布尔标记；Web API 在响应中附加 `images` / `cover` 标记只是方便前端使用。
@@ -46,8 +41,7 @@
 | 槽位类型 | 尺寸 | 完整文件字节数 |
 | --- | --- | ---: |
 | 头像 | 88 × 88 | 15,508 |
-| 游戏封面 | 72 × 96 | 13,844 |
-| 二维码 | 180 × 180 | 64,820 |
+| 游戏封面 | 72 × 108 | 15,572 |
 
 上传接口要求与该槽位完全一致的字节数，校验文件头与尺寸，把内容流式写入 `<name>.tmp`，计算 CRC，成功后才替换旧文件。上传失败会保留旧图片。
 
@@ -61,7 +55,7 @@
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "name": "Player One",
   "tagline": "Plays a little every day.",
   "platforms": {
@@ -69,14 +63,16 @@
     "switch": { "id": "SW-0000-0000-0000" },
     "playstation": { "id": "player_one" }
   },
-  "contact": {
-    "weibo": { "handle": "@player_one", "url": "https://weibo.com/u/0" },
-    "wechat": { "name": "Player", "id": "player_one" }
-  }
+  "contacts": [
+    { "platform": "微博", "account": "@player_one", "link": "https://weibo.com/u/0" },
+    { "platform": "微信", "account": "player_one", "link": "" }
+  ]
 }
 ```
 
-长度按码点计算：姓名 24，一句话介绍 60（允许换行），三个平台 ID 各 40，微博账号 40，微信昵称 24，微信号 40。URL 必须以 `http://` 或 `https://` 开头，不含空格/控制字符，且不超过 480 字节。
+联系方式是通用列表：每条由任意平台名称、该平台下的账号和可选链接组成。设备用链接生成二维码；没有填写链接的条目不显示二维码。长度按码点计算：姓名 24，一句话介绍 60（允许换行），三个平台 ID 各 40，最多 8 条联系方式，每条平台 16、账号 40。链接必须以 `http://` 或 `https://` 开头，不含空格/控制字符，且不超过 480 字节。
+
+版本 1 文件保存固定的 `contact.weibo` / `contact.wechat` 对象；加载时会转换成通用联系方式，下一次保存会写成版本 2。旧固件上传的二维码图片不再读取或展示。
 
 ### games.json
 
@@ -89,7 +85,7 @@
       "title": "A Game",
       "group": "favorite",
       "note": "Short note",
-      "link": "https://www.xiaoheihe.cn/app/..."
+      "link": "https://example.com/game"
     }
   ]
 }
@@ -134,7 +130,7 @@
 | DELETE | `/api/images/<slot>` | token | 删除图片 |
 | POST | `/api/validate-text` | 否 | 检查最多 8 段文字的字体覆盖 |
 
-槽位：`avatar`、`qr_steam`、`qr_switch`、`qr_psn`、`qr_wechat`、`qr_wechat_pay`、`games/<game-id>`。
+槽位：`avatar` 和 `games/<game-id>`。联系方式二维码由设备根据链接生成，不是可上传的图片。
 
 ### Claim
 
@@ -234,8 +230,8 @@
 
 ## 图片上传流程
 
-1. 浏览器校验 JPG/PNG（拒绝 WebP/GIF），处理方向并裁剪：头像方形、封面 3:4 竖版、二维码按比例缩放并补白。
-2. 浏览器绘制到 88 × 88、72 × 96 或 180 × 180，转换成 RGB565 小端（照片用有序抖动，二维码用亮度阈值），计算 CRC32，以 `application/octet-stream` 和精确长度发送。
+1. 浏览器校验 JPG/PNG（拒绝 WebP/GIF），处理方向并裁剪：头像方形、封面 2:3 竖版。
+2. 浏览器绘制到 88 × 88 或 72 × 108，转换成 RGB565 小端（有序抖动），计算 CRC32，以 `application/octet-stream` 和精确长度发送。
 3. 服务端校验槽位、token、类型、长度、剩余空间，然后读取文件头，把像素流式写入临时文件并同步计算 CRC。
 4. 成功后替换文件、刷新图片标记并返回新的存储百分比；任何失败都会删除临时文件，旧图片继续有效。
 
@@ -250,7 +246,13 @@
   "format": "playerpass-backup",
   "version": 1,
   "exported_at": "2026-11-11T12:00:00.000Z",
-  "profile": { "version": 1, "name": "Player One" },
+  "profile": {
+    "version": 2,
+    "name": "Player One",
+    "contacts": [
+      { "platform": "微博", "account": "@player_one", "link": "https://weibo.com/u/0" }
+    ]
+  },
   "games": { "version": 1, "games": [] },
   "nfc": { "version": 1, "enabled": false },
   "images": {
@@ -264,7 +266,7 @@
 - 导出只读，不需要编辑租约。
 - 导入需要编辑 token。它校验格式与槽位，通过 PUT 写入个人资料、游戏和 NFC，然后恢复固定资料图片与游戏封面。备份中缺失的槽位会被删除，使设备状态与备份一致。
 - 浏览器最多接受 16 MB 的文件。导入在第一个错误处停止，不自动回滚；建议导入前先导出当前状态。
-- 槽位名与图片 API 完全一致。
+- 槽位名与图片 API 完全一致。旧备份中的 `qr_steam`、`qr_switch`、`qr_psn`、`qr_wechat`、`qr_wechat_pay` 槽位会被接受，但导入时忽略。
 
 ## 错误响应
 
@@ -288,4 +290,4 @@
 
 ## 手机网络行为
 
-热点没有上游互联网。iOS 通常在连接无互联网热点时保留移动数据；部分 Android 版本会把全部流量路由到热点，直到断开热点才能上网。后台完全离线可用，但从小黑盒链接跳转可能需要先断开热点。在用户的实际手机上验证前，该行为标记为未验证。
+热点没有上游互联网。iOS 通常在连接无互联网热点时保留移动数据；部分 Android 版本会把全部流量路由到热点，直到断开热点才能上网。后台完全离线可用，但跳转外部链接可能需要先断开热点。在用户的实际手机上验证前，该行为标记为未验证。
