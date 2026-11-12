@@ -12,7 +12,7 @@
 /lfs/
   data/
     profile.json        个人资料与通用联系方式列表
-    games.json          游戏列表，按“喜欢 → 正在玩”归一化
+    games.json          游戏列表，按保存顺序
   img/
     avatar.bin          88 × 88
     games/<game-id>.bin 216 × 101
@@ -84,7 +84,6 @@
     {
       "id": "g-a1b2c3",
       "title": "A Game",
-      "group": "favorite",
       "note": "Short note",
       "link": "https://example.com/game"
     }
@@ -92,7 +91,7 @@
 }
 ```
 
-`id` 为 4–24 个小写字母、数字或 `-`。名称必填（40 码点），介绍允许换行（120 码点），链接可选（480 字节）。`group` 为 `favorite` 或 `playing`。加载与保存时数组会归一化：先“喜欢”，后“正在玩”，组内保持相对顺序。API 以 200 条作为输入/资源保护上限；产品预期约 10 款。
+`id` 为 4–24 个小写字母、数字或 `-`。名称必填（40 码点），介绍允许换行（120 码点），链接可选（480 字节）。数组保持保存顺序；旧文件里的 `group` 字段会被忽略。API 以 200 条作为输入/资源保护上限；产品预期约 10 款。
 
 ## HTTP API
 

@@ -19,6 +19,7 @@ typedef enum {
     PAGE_HOME,
     PAGE_GAMES,
     PAGE_CONTACT,
+    PAGE_PLATFORM,
     PAGE_OVERLAY,
     PAGE_MANAGE,
     PAGE_ERROR,
@@ -26,7 +27,7 @@ typedef enum {
 
 #define HOME_PLATFORMS 3
 #define HOME_NAV 2
-#define HOME_ITEMS HOME_NAV
+#define HOME_ITEMS (HOME_PLATFORMS + HOME_NAV)
 
 // One column of full-width cards: the selected card sits at the top and the
 // next card peeks in below (the 232 px list area clips it). Each card is the
@@ -57,6 +58,7 @@ static pp_topbar_t *s_active_bar;
 static pp_topbar_t s_home_bar;
 static pp_topbar_t s_games_bar;
 static pp_topbar_t s_contact_bar;
+static pp_topbar_t s_platform_bar;
 static pp_topbar_t s_overlay_bar;
 static pp_topbar_t s_manage_bar;
 static pp_topbar_t s_error_bar;
@@ -77,6 +79,7 @@ static void set_current(lv_obj_t *screen, page_t page, pp_topbar_t *bar)
 static void free_home_avatar(void);
 static void free_game_covers(void);
 static void free_overlay_images(void);
+static void free_platform_qr(void);
 static void free_manage_qr(void);
 
 static void delete_current_screen(void)
@@ -98,6 +101,7 @@ static void destroy_all_pages(void)
     free_home_avatar();
     free_game_covers();
     free_overlay_images();
+    free_platform_qr();
     free_manage_qr();
     s_page = PAGE_NONE;
 }
@@ -168,19 +172,23 @@ static void free_home_avatar(void)
 
 static void home_refresh(void)
 {
-    // Platform IDs are display-only; only the three navigation rows are
-    // selectable.
+    // All five home rows are selectable: the three platform accounts open a
+    // detail page, the two navigation rows open their list pages.
     for (int i = 0; i < HOME_PLATFORMS; ++i) {
-        pp_row_style(s_home_platform_panel[i], false);
-        pp_row_text_color(s_home_platform_name[i], false);
+        const bool selected = s_home_sel == i;
+        pp_row_style(s_home_platform_panel[i], selected);
+        pp_row_text_color(s_home_platform_name[i], selected);
         const bool has_value = platform_id(i)[0] != '\0';
         lv_obj_set_style_text_color(
             s_home_platform_value[i],
-            lv_color_hex(has_value ? PP_COLOR_TEXT : PP_COLOR_DIM), 0);
-        pp_icon_recolor(s_home_platform_icon[i], PP_COLOR_MUTED);
+            lv_color_hex(selected ? PP_COLOR_MINT
+                                  : (has_value ? PP_COLOR_TEXT : PP_COLOR_DIM)),
+            0);
+        pp_icon_recolor(s_home_platform_icon[i],
+                        selected ? PP_COLOR_MINT : PP_COLOR_MUTED);
     }
     for (int i = 0; i < HOME_NAV; ++i) {
-        const bool selected = s_home_sel == i;
+        const bool selected = s_home_sel == HOME_PLATFORMS + i;
         pp_row_style(s_home_nav_panel[i], selected);
         pp_row_text_color(s_home_nav_label[i], selected);
         pp_icon_recolor(s_home_nav_icon[i],
@@ -198,24 +206,27 @@ static void build_home(void)
     s_home_bar = pp_topbar_create(s_screen);
     s_active_bar = &s_home_bar;
 
-    lv_obj_t *frame = pp_panel_create(s_screen, 12, 30, 92, 92);
+    // Home rhythm: 9 px at the top and bottom edges, 6 px between the avatar,
+    // name and tagline, and 10 px around the two lists.
+    lv_obj_t *frame = pp_panel_create(s_screen, 78, 33, 84, 84);
     char rel[PP_STORAGE_PATH_MAX];
     if (s_images && s_images->avatar && s_storage &&
         pp_image_avatar_path(rel, sizeof(rel)) &&
         pp_image_load(s_storage, rel, &s_home_avatar) == PP_STORAGE_OK) {
         s_home_avatar_loaded = true;
-        pp_image_widget_create(frame, &s_home_avatar, 2, 2, 88, 88);
+        pp_image_widget_create(frame, &s_home_avatar, 2, 2, 80, 80);
     } else {
         lv_obj_t *placeholder = pp_icon_create(frame, PP_ICON_USER,
-                                               PP_COLOR_DIM, 30, 30);
+                                               PP_COLOR_DIM, 26, 26);
         if (placeholder) lv_obj_set_size(placeholder, 32, 32);
     }
 
     const char *name = s_profile ? s_profile->name : "";
     lv_obj_t *name_label = dyn_label(s_screen, &pp_font_24, PP_COLOR_TEXT,
-                                     112, 32, 116, 56,
+                                     12, 123, 216, 28,
                                      name[0] ? name : "未设置姓名");
     if (name_label) {
+        lv_obj_set_style_text_align(name_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(name_label, LV_LABEL_LONG_MODE_DOTS);
         if (!name[0]) {
             lv_obj_set_style_text_color(name_label, lv_color_hex(PP_COLOR_DIM),
@@ -224,16 +235,15 @@ static void build_home(void)
     }
     const char *tagline = s_profile ? s_profile->tagline : "";
     lv_obj_t *tagline_label = dyn_label(
-        s_screen, &pp_font_12, tagline[0] ? PP_COLOR_MUTED : PP_COLOR_DIM, 112,
-        90, 116, 32, tagline[0] ? tagline : "在管理后台补充一句话介绍");
-    if (tagline_label) lv_label_set_long_mode(tagline_label, LV_LABEL_LONG_MODE_DOTS);
-
-    lv_obj_t *section = pp_label_create(s_screen, "平台账号", &pp_font_12,
-                                        PP_COLOR_DIM, 12, 128, 120);
-    (void)section;
+        s_screen, &pp_font_12, tagline[0] ? PP_COLOR_MUTED : PP_COLOR_DIM, 12,
+        157, 216, 16, tagline[0] ? tagline : "在管理后台补充一句话介绍");
+    if (tagline_label) {
+        lv_obj_set_style_text_align(tagline_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(tagline_label, LV_LABEL_LONG_MODE_DOTS);
+    }
 
     for (int i = 0; i < HOME_PLATFORMS; ++i) {
-        lv_obj_t *panel = pp_panel_create(s_screen, 12, 146 + i * 22, 216, 20);
+        lv_obj_t *panel = pp_panel_create(s_screen, 12, 183 + i * 20, 216, 18);
         s_home_platform_panel[i] = panel;
         s_home_platform_icon[i] = pp_icon_create(panel, PLATFORM_ICONS[i],
                                                  PP_COLOR_MUTED, 5, 3);
@@ -241,12 +251,12 @@ static void build_home(void)
             lv_obj_set_size(s_home_platform_icon[i], 12, 12);
         }
         s_home_platform_name[i] = pp_label_create(
-            panel, PLATFORM_NAMES[i], &pp_font_12, PP_COLOR_TEXT, 24, 0, 54);
+            panel, PLATFORM_NAMES[i], &pp_font_12, PP_COLOR_TEXT, 24, -1, 54);
         if (s_home_platform_name[i]) {
             lv_label_set_long_mode(s_home_platform_name[i], LV_LABEL_LONG_MODE_DOTS);
         }
         s_home_platform_value[i] = dyn_label(
-            panel, &pp_font_12, PP_COLOR_TEXT, 80, 0, 110, 16,
+            panel, &pp_font_12, PP_COLOR_TEXT, 80, -1, 110, 16,
             platform_id(i)[0] ? platform_id(i) : "未设置");
         if (s_home_platform_value[i]) {
             lv_obj_set_style_text_align(s_home_platform_value[i],
@@ -256,20 +266,18 @@ static void build_home(void)
         }
     }
 
-    pp_divider(s_screen, 214);
-
     for (int i = 0; i < HOME_NAV; ++i) {
-        lv_obj_t *panel = pp_panel_create(s_screen, 12, 218 + i * 24, 216, 22);
+        lv_obj_t *panel = pp_panel_create(s_screen, 12, 251 + i * 20, 216, 18);
         s_home_nav_panel[i] = panel;
         s_home_nav_icon[i] = pp_icon_create(panel, NAV_ICONS[i],
-                                            PP_COLOR_MUTED, 5, 4);
+                                            PP_COLOR_MUTED, 5, 3);
         s_home_nav_label[i] = pp_label_create(panel, NAV_NAMES[i], &pp_font_12,
-                                              PP_COLOR_TEXT, 26, 1, 156);
+                                              PP_COLOR_TEXT, 26, -1, 156);
         if (s_home_nav_label[i]) {
             lv_label_set_long_mode(s_home_nav_label[i], LV_LABEL_LONG_MODE_DOTS);
         }
         s_home_nav_chevron[i] = pp_icon_create(panel, PP_ICON_CHEVRON,
-                                               PP_COLOR_DIM, 198, 5);
+                                               PP_COLOR_DIM, 198, 3);
         if (s_home_nav_chevron[i]) {
             lv_obj_set_size(s_home_nav_chevron[i], 12, 12);
         }
@@ -278,6 +286,106 @@ static void build_home(void)
     pp_footer(s_screen, "OK 进入 · 双击OK 管理模式");
     home_refresh();
     set_current(s_screen, PAGE_HOME, &s_home_bar);
+}
+
+static pp_qr_image_t s_platform_qr;
+static bool s_platform_qr_loaded;
+
+static void free_platform_qr(void)
+{
+    if (s_platform_qr_loaded) {
+        pp_qr_free(&s_platform_qr);
+        s_platform_qr_loaded = false;
+    }
+}
+
+static void build_platform_detail(int index)
+{
+    if (index < 0 || index >= HOME_PLATFORMS) return;
+    destroy_all_pages();
+    s_screen = pp_screen_create();
+    if (!s_screen) return;
+    s_platform_bar = pp_topbar_create(s_screen);
+    s_active_bar = &s_platform_bar;
+    pp_page_title(s_screen, PLATFORM_NAMES[index]);
+
+    const char *id = platform_id(index);
+    if (index == 2 && id[0]) {
+        // PSN: a friend QR from the public profile URL.  The QR renderer keeps
+        // its own A8 mask, so free it whenever this page is destroyed.
+        char link[256];
+        snprintf(link, sizeof(link), "https://profile.playstation.com/%s", id);
+        if (pp_qr_render_text_sized(link, 120, &s_platform_qr)) {
+            s_platform_qr_loaded = true;
+            lv_obj_t *panel = pp_panel_create(s_screen, 12, 64, 216, 200);
+            lv_obj_t *white = lv_obj_create(panel);
+            lv_obj_set_pos(white, 44, 8);
+            lv_obj_set_size(white, 128, 128);
+            lv_obj_set_style_bg_color(white, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_bg_opa(white, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(white, 2, 0);
+            lv_obj_set_style_border_color(white, lv_color_hex(PP_COLOR_MINT),
+                                          0);
+            lv_obj_set_style_radius(white, 0, 0);
+            lv_obj_set_style_pad_all(white, 0, 0);
+            lv_obj_remove_flag(white, LV_OBJ_FLAG_SCROLLABLE);
+
+            lv_obj_t *qr = lv_image_create(white);
+            lv_image_set_src(qr, &s_platform_qr.dsc);
+            lv_obj_set_pos(qr, 4, 4);
+            lv_obj_set_size(qr, 120, 120);
+            lv_image_set_inner_align(qr, LV_IMAGE_ALIGN_STRETCH);
+            lv_image_set_antialias(qr, false);
+            lv_obj_set_style_image_recolor(qr, lv_color_hex(0x000000), 0);
+            lv_obj_set_style_image_recolor_opa(qr, LV_OPA_COVER, 0);
+            lv_obj_remove_flag(qr, LV_OBJ_FLAG_SCROLLABLE);
+
+            lv_obj_t *value = dyn_label(panel, &pp_font_24, PP_COLOR_TEXT, 12,
+                                        144, 192, 28, id);
+            if (value) {
+                lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_CENTER, 0);
+                lv_label_set_long_mode(value, LV_LABEL_LONG_MODE_DOTS);
+            }
+            lv_obj_t *hint = dyn_label(panel, &pp_font_12, PP_COLOR_MUTED, 0,
+                                       176, 216, 16, "扫码加好友");
+            if (hint) {
+                lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+            }
+
+            pp_footer(s_screen, "长按OK 返回");
+            set_current(s_screen, PAGE_PLATFORM, &s_platform_bar);
+            return;
+        }
+        ESP_LOGW(TAG, "PSN 二维码生成失败，改用文字详情");
+    }
+
+    lv_obj_t *panel = pp_panel_create(s_screen, 12, 64, 216, 200);
+    lv_obj_t *icon = pp_icon_create(panel, PLATFORM_ICONS[index],
+                                    PP_COLOR_MINT, 96, 18);
+    if (icon) lv_obj_set_size(icon, 24, 24);
+
+    if (id[0]) {
+        lv_obj_t *value = dyn_label(panel, &pp_font_24, PP_COLOR_MINT, 12, 62,
+                                    192, 120, id);
+        if (value) {
+            lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_CENTER, 0);
+            lv_label_set_long_mode(value, LV_LABEL_LONG_MODE_WRAP);
+        }
+    } else {
+        lv_obj_t *value = dyn_label(panel, &pp_font_24, PP_COLOR_DIM, 12, 62,
+                                    192, 28, "未设置");
+        if (value) {
+            lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_CENTER, 0);
+        }
+        lv_obj_t *hint = dyn_label(panel, &pp_font_12, PP_COLOR_MUTED, 12, 100,
+                                   192, 32, "请在管理后台补充。");
+        if (hint) {
+            lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+        }
+    }
+
+    pp_footer(s_screen, "长按OK 返回");
+    set_current(s_screen, PAGE_PLATFORM, &s_platform_bar);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -429,7 +537,6 @@ static size_t s_game_sel;
 static lv_obj_t *s_games_container;
 static lv_obj_t *s_games_count;
 static lv_obj_t *s_games_more_top;
-static lv_obj_t *s_games_more_bottom;
 static lv_obj_t *s_window_panels[GAME_WINDOW_ENTRIES];
 static lv_obj_t *s_window_titles[GAME_WINDOW_ENTRIES];
 static lv_obj_t *s_window_frames[GAME_WINDOW_ENTRIES];
@@ -595,13 +702,8 @@ static void games_render_window(void)
         } else {
             pp_icon_create(card, PP_ICON_IMAGE, PP_COLOR_DIM, 101, 43);
         }
-        lv_obj_t *group_icon = pp_icon_create(
-            card,
-            game->group == PP_GAME_GROUP_FAVORITE ? PP_ICON_HEART : PP_ICON_PLAY,
-            PP_COLOR_MUTED, 6, 112);
-        if (group_icon) lv_obj_set_size(group_icon, 8, 8);
         s_window_titles[slot] = dyn_label(
-            card, &pp_font_12, PP_COLOR_TEXT, 18, 108, 192, 16,
+            card, &pp_font_12, PP_COLOR_TEXT, 6, 107, 204, 16,
             game->title[0] ? game->title : "未命名游戏");
         if (s_window_titles[slot]) {
             lv_label_set_long_mode(s_window_titles[slot],
@@ -621,14 +723,9 @@ static void games_render_window(void)
     }
 
     const bool more_top = s_game_sel > 0;
-    const bool more_bottom = s_game_sel + 1 < count;
     if (s_games_more_top) {
         lv_obj_set_style_bg_opa(s_games_more_top,
                                 more_top ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-    }
-    if (s_games_more_bottom) {
-        lv_obj_set_style_bg_opa(
-            s_games_more_bottom, more_bottom ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
     }
     games_refresh_selection();
 }
@@ -661,18 +758,7 @@ static void build_games(void)
     lv_obj_set_style_pad_all(s_games_more_top, 0, 0);
     lv_obj_remove_flag(s_games_more_top, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_games_more_bottom = lv_obj_create(s_screen);
-    lv_obj_set_pos(s_games_more_bottom, 12, 290);
-    lv_obj_set_size(s_games_more_bottom, 216, 2);
-    lv_obj_set_style_bg_color(s_games_more_bottom,
-                              lv_color_hex(PP_COLOR_MINT), 0);
-    lv_obj_set_style_bg_opa(s_games_more_bottom, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_games_more_bottom, 0, 0);
-    lv_obj_set_style_radius(s_games_more_bottom, 0, 0);
-    lv_obj_set_style_pad_all(s_games_more_bottom, 0, 0);
-    lv_obj_remove_flag(s_games_more_bottom, LV_OBJ_FLAG_SCROLLABLE);
-
-    pp_footer(s_screen, "OK 显示链接二维码 · 长按OK 返回");
+    pp_footer(s_screen, "长按OK 返回");
     set_current(s_screen, PAGE_GAMES, &s_games_bar);
     games_render_window();
 }
@@ -1155,6 +1241,7 @@ ui_action_t ui_app_handle_key(bsp_btn_t button, bsp_btn_ev_t event)
             return UI_ACTION_NONE;
         case PAGE_GAMES:
         case PAGE_CONTACT:
+        case PAGE_PLATFORM:
             build_home();
             return UI_ACTION_NONE;
         case PAGE_MANAGE:
@@ -1184,8 +1271,13 @@ ui_action_t ui_app_handle_key(bsp_btn_t button, bsp_btn_ev_t event)
             if (s_home_sel + 1 < HOME_ITEMS) ++s_home_sel;
             home_refresh();
         } else if (button == BSP_BTN_OK) {
-            if (s_home_sel == 0) build_games();
-            else build_contact();
+            if (s_home_sel < HOME_PLATFORMS) {
+                build_platform_detail(s_home_sel);
+            } else if (s_home_sel == HOME_PLATFORMS) {
+                build_games();
+            } else {
+                build_contact();
+            }
         }
         break;
     case PAGE_GAMES:
@@ -1194,15 +1286,6 @@ ui_action_t ui_app_handle_key(bsp_btn_t button, bsp_btn_ev_t event)
             games_move(-1);
         } else if (button == BSP_BTN_DOWN) {
             games_move(1);
-        } else if (button == BSP_BTN_OK) {
-            const pp_game_t *game = &s_games->items[s_game_sel];
-            if (game->link[0]) {
-                show_generated_qr("游戏链接", game->link,
-                                  game->title[0] ? game->title : "游戏链接");
-            } else {
-                show_notice("游戏链接",
-                            "这款游戏还没有设置通用链接。请在管理后台补充。");
-            }
         }
         break;
     case PAGE_CONTACT:

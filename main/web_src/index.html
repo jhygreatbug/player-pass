@@ -132,7 +132,7 @@
           <button class="btn small primary" id="add-game" data-mutation>新增游戏</button>
         </div>
       </div>
-      <p class="muted small">列表按“喜欢的游戏 → 正在玩的游戏”分组展示。设备一屏显示两张封面卡片；游戏数量受设备存储与内存限制。</p>
+      <p class="muted small">列表按保存顺序展示。设备一屏显示两张封面卡片；游戏数量受设备存储与内存限制。</p>
 
       <div class="game-picker hidden" id="game-picker">
         <div class="picker-tabs" role="tablist" aria-label="添加游戏来源">
@@ -162,7 +162,7 @@
         </div>
       </div>
 
-      <div class="games-groups" id="games-groups"></div>
+      <div class="games-list" id="games-list"></div>
       <p class="empty-state hidden" id="games-empty">还没有游戏。点击“新增游戏”开始。</p>
       <div class="dirty" id="games-dirty"></div>
     </div>
@@ -178,23 +178,9 @@
         </div>
       </div>
       <div class="grid two">
-        <label class="field">游戏名称
+        <label class="field span-two">游戏名称
           <input id="g-title" maxlength="40" placeholder="例如：塞尔达传说">
           <span class="counter" data-counter-for="g-title"></span>
-        </label>
-        <label class="field">分组
-          <select id="g-group">
-            <option value="favorite">喜欢的游戏</option>
-            <option value="playing">正在玩的游戏</option>
-          </select>
-        </label>
-        <label class="field span-two">简短介绍
-          <textarea id="g-note" maxlength="120" rows="3" placeholder="一两句话介绍这款游戏"></textarea>
-          <span class="counter" data-counter-for="g-note"></span>
-        </label>
-        <label class="field span-two">通用链接
-          <input id="g-link" maxlength="480" placeholder="https://example.com/game">
-          <span class="muted small">可填写官网、商店页面等；设备会为它生成二维码。</span>
         </label>
       </div>
       <div class="cover-editor">

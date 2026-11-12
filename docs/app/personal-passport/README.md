@@ -22,7 +22,7 @@ The firmware targets the documented ESP32-C3 board (8 MB Flash, no PSRAM,
 | Input | Action |
 | --- | --- |
 | UP / DOWN short press | Move the selection, clamped at both ends |
-| OK short press | Enter a page or open a QR code |
+| OK short press | Enter a page, open a detail view, or show a QR code |
 | OK long press | Go back one level / close an overlay |
 | OK double press on Home | Enter the management AP mode |
 
@@ -31,16 +31,18 @@ footer with its available actions.
 
 ### Pages
 
-1. **Home** - 92 x 92 avatar frame, name, one-line introduction, three display-only
-   platform rows (Steam / Switch / PSN) with their IDs, and two navigation rows
-   (Games, Contact). Pressing OK on a navigation row opens that page;
-   platform rows are not selectable.
-2. **Games** - one column of cover cards grouped into "Favourite games" and
-   "Playing". Each card shows a 216 x 101 Steam-style header cover above a
-   one-line title, with a small group icon. The selected card sits at the top
-   and the next card peeks in below, so the object count stays small even if
-   the stored list is long. OK renders a QR code for the game link, or shows a
-   notice when no link is configured.
+1. **Home** - a centred 84 x 84 avatar frame with the name and one-line
+   introduction below it, three platform rows (Steam / Switch / PSN) with their
+   IDs, and two navigation rows (Games, Contact). The top and bottom margins
+   are 9 px, the avatar/name/tagline stack uses 6 px gaps, and the two lists
+   are 10 px apart. All five rows are selectable: OK on Steam or Switch opens
+   a large read-only account page, OK on PSN opens a friend QR code for
+   `https://profile.playstation.com/<id>`, and OK on a navigation row opens
+   that page.
+2. **Games** - one column of cover cards in the saved order. Each card shows a
+   216 x 101 Steam-style header cover above a one-line title. The selected
+   card sits at the top and the next card peeks in below, so the object count
+   stays small even if the stored list is long.
 3. **Contact** - a generic list of entries, each with a platform name, the
    account on that platform, and an optional link. An entry with a link shows a
    QR marker and renders a 180 x 180 QR code on demand; an entry without a link
@@ -193,10 +195,9 @@ The Games tab offers manual entry plus optional Steam-assisted entry. When the
 phone can reach the internet, it can search the Steam store; if the profile
 contains a Steam friend code (or a SteamID64), it can also list the player's
 recently played games and most-played games. Selecting a candidate fetches the
-localized name, short description, store link, and the 460 x 215 header cover
-from the game-detail endpoint. The console uses the localized description as
-the initial note, crops the cover to 216 x 101, and uploads it together with the
-other pending data when the user taps the single Save changes action. The
+localized name, store link, and the 460 x 215 header cover from the game-detail
+endpoint. The console crops the cover to 216 x 101 and uploads it together with
+the other pending data when the user taps the single Save changes action. The
 console calls
 `https://player-pass.jhygreatbug.workers.dev` from the browser; the device AP
 itself has no upstream connection. Cover downloads from the Steam CDN rely on
@@ -209,14 +210,14 @@ Automated:
 - `./tools/validate.sh --static` passes.
 - `./tools/validate.sh --firmware` produces and verifies the merged image.
 - Host tests cover UTF-8, JSON, atomic replacement, image validation, storage
-  thresholds, game grouping, lease/grace/idle state, and font coverage.
+  thresholds, lease/grace/idle state, and font coverage.
 
 On the device (not established by a build):
 
 - Boots to the redesigned Home; avatar, name, tagline, IDs, battery render.
 - All three buttons: selection clamps, OK actions, long-OK back, double-OK on
   Home enters management mode.
-- Games card grid and window scrolling; on-device link QR generation.
+- Games card grid and window scrolling.
 - Contact list browsing, account panels, and QR generation from links.
 - Management AP is visible, WPA2 protected, and the screen shows SSID/password/
   URL; repeated enter/exit cycles do not leak tasks or sockets.
@@ -232,22 +233,23 @@ On the device (not established by a build):
 
 ## Delivery status
 
-Recorded for `main` on 2026-11-11 (Steam game entry, cover cards, and simplified
-pages). A successful build is not hardware acceptance.
+Recorded for `main` on 2026-11-11 (centred home card, platform account details
+with a PSN friend QR, single game list, leaner console). A successful build is
+not hardware acceptance.
 
 | Item | Result |
 | --- | --- |
-| Build | PASS - ESP-IDF 5.5.3; application 2,123,136 bytes (`0x206580`); merged image 2,188,672 bytes |
+| Build | PASS - ESP-IDF 5.5.3; application 2,122,496 bytes (`0x206300`); merged image 2,188,032 bytes |
 | Host tests | PASS - `./tools/validate.sh --static` and `./tools/validate.sh --firmware` |
 | Device tests | NOT RUN - a USB Serial/JTAG device is connected at `/dev/cu.usbmodem1432101`; flashing and acceptance are pending user approval |
-| Unverified | display/backlight/font rendering; all three buttons and navigation; Wi-Fi AP visibility and WPA2; phone console access, lease/grace and manual exit; image upload and persistence; contact list editing and link-generated QR codes; game-link QR codes from the games page; manual export/import; first-boot LittleFS format; battery readings; USB logs/flashing; phone cellular data behavior; Steam search and player playtime lists while the phone is online |
+| Unverified | display/backlight/font rendering; all three buttons and navigation; Wi-Fi AP visibility and WPA2; phone console access, lease/grace and manual exit; image upload and persistence; contact list editing and link-generated QR codes; manual export/import; first-boot LittleFS format; battery readings; USB logs/flashing; phone cellular data behavior; Steam search and player playtime lists while the phone is online |
 
 Merged image: `build/FoloToy-AI-Passport-full.bin`
 
-SHA-256: `0861684c4823429032896520c3977e7090b07a6355e0843180b5a13f6fc0cabe`
+SHA-256: `f04a54ec842b44dd9353441fa2076d618eb89f3560ee867f4858c80233ff0351`
 
 Verified debug bundle:
-`build/firmware/0861684c4823429032896520c3977e7090b07a6355e0843180b5a13f6fc0cabe/`
+`build/firmware/f04a54ec842b44dd9353441fa2076d618eb89f3560ee867f4858c80233ff0351/`
 
 ## Management page does not respond
 
@@ -294,8 +296,8 @@ captive-portal probe URL or assume the phone will open the page automatically.
 - The web console calls a Steam game-data service only for optional game search
   and player playtime lists. Search terms and the Steam friend code entered in
   the profile are sent to that service; profile, games, contacts, and images stay
-  on the device. Game links are rendered as QR codes for the phone; cross-origin
-  and anti-bot behaviour of external sites are outside the firmware.
+  on the device. Cross-origin and anti-bot behaviour of external sites are
+  outside the firmware.
 - The AP password is a fixed product password in the firmware. Anyone who knows it
   can join the AP; the console has no login. Rotate it by rebuilding the firmware.
 - Backup is manual JSON export/import only. There is no automatic backup, ZIP,

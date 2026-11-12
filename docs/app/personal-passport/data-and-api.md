@@ -14,7 +14,7 @@ required.
 /lfs/
   data/
     profile.json        profile text and generic contact list
-    games.json          game list, normalized to favourites then playing
+    games.json          game list, in saved order
   img/
     avatar.bin          88 x 88
     games/<game-id>.bin 216 x 101
@@ -106,7 +106,6 @@ SteamID64; the game-data service converts friend codes itself.
     {
       "id": "g-a1b2c3",
       "title": "A Game",
-      "group": "favorite",
       "note": "Short note",
       "link": "https://example.com/game"
     }
@@ -116,10 +115,9 @@ SteamID64; the game-data service converts friend codes itself.
 
 `id` is 4-24 characters of lowercase letters, digits, and `-`. Title is
 required (40 code points), note allows newlines (120), link is optional (480
-bytes). `group` is `favorite` or `playing`. The array is normalized on load and
-save: all favourites first, then playing, preserving relative order inside each
-group. The API accepts up to 200 entries as an input/resource guard; the product
-expectation is about ten.
+bytes). The array keeps the saved order. Older files may still contain a
+`group` field; it is ignored. The API accepts up to 200 entries as an
+input/resource guard; the product expectation is about ten.
 
 ## HTTP API
 

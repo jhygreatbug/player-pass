@@ -172,8 +172,7 @@ static void test_profile_legacy_migration(void)
     CHECK_STR_EQ(profile.contacts[2].account, "old_wx");
 }
 
-static void game_fixture(pp_game_t *game, const char *id, const char *title,
-                         pp_game_group_t group)
+static void game_fixture(pp_game_t *game, const char *id, const char *title)
 {
     memset(game, 0, sizeof(*game));
     snprintf(game->id, sizeof(game->id), "%s", id);
@@ -181,29 +180,27 @@ static void game_fixture(pp_game_t *game, const char *id, const char *title,
     snprintf(game->note, sizeof(game->note), "%s 的简短介绍", title);
     snprintf(game->link, sizeof(game->link), "https://example.com/game/%s",
              id);
-    game->group = group;
 }
 
-static void test_games_order_and_roundtrip(void)
+static void test_games_roundtrip(void)
 {
     pp_games_t games;
     pp_games_init(&games);
     pp_game_t a;
     pp_game_t b;
     pp_game_t c;
-    game_fixture(&a, "g-aaaa", "游戏甲", PP_GAME_GROUP_FAVORITE);
-    game_fixture(&b, "g-bbbb", "游戏乙", PP_GAME_GROUP_PLAYING);
-    game_fixture(&c, "g-cccc", "游戏丙", PP_GAME_GROUP_FAVORITE);
+    game_fixture(&a, "g-aaaa", "游戏甲");
+    game_fixture(&b, "g-bbbb", "游戏乙");
+    game_fixture(&c, "g-cccc", "游戏丙");
     CHECK(pp_games_add(&games, &a));
     CHECK(pp_games_add(&games, &b));
     CHECK(pp_games_add(&games, &c));
     CHECK(!pp_games_add(&games, &a)); // duplicate id
 
-    pp_games_normalize(&games);
     CHECK(games.count == 3);
     CHECK_STR_EQ(games.items[0].id, "g-aaaa");
-    CHECK_STR_EQ(games.items[1].id, "g-cccc");
-    CHECK_STR_EQ(games.items[2].id, "g-bbbb");
+    CHECK_STR_EQ(games.items[1].id, "g-bbbb");
+    CHECK_STR_EQ(games.items[2].id, "g-cccc");
 
     games.items[0].has_cover = true;
     char error[128];
@@ -226,7 +223,8 @@ static void test_games_order_and_roundtrip(void)
     CHECK(pp_games_from_json(json, &parsed, error, sizeof(error)));
     CHECK(parsed.count == 3);
     CHECK_STR_EQ(parsed.items[0].id, "g-aaaa");
-    CHECK_STR_EQ(parsed.items[2].id, "g-bbbb");
+    CHECK_STR_EQ(parsed.items[1].id, "g-bbbb");
+    CHECK_STR_EQ(parsed.items[2].id, "g-cccc");
     CHECK(parsed.items[0].has_cover == false);
     cJSON_free(json);
 
@@ -243,7 +241,7 @@ static void test_games_validation(void)
     pp_games_t games;
     pp_games_init(&games);
     pp_game_t game;
-    game_fixture(&game, "g-aaaa", "游戏甲", PP_GAME_GROUP_FAVORITE);
+    game_fixture(&game, "g-aaaa", "游戏甲");
     char error[128];
 
     CHECK(game.title[0] != '\0');
@@ -253,7 +251,7 @@ static void test_games_validation(void)
 
     games.items[0].title[0] = '\0';
     CHECK(!pp_games_validate(&games, error, sizeof(error)));
-    game_fixture(&games.items[0], "g-aaaa", "游戏甲", PP_GAME_GROUP_FAVORITE);
+    game_fixture(&games.items[0], "g-aaaa", "游戏甲");
 
     snprintf(games.items[0].link, sizeof(games.items[0].link), "mailto:x@y");
     CHECK(!pp_games_validate(&games, error, sizeof(error)));
@@ -268,14 +266,18 @@ static void test_games_validation(void)
 
     pp_games_init(&games);
     CHECK(!pp_games_from_json(
-        "{\"version\":1,\"games\":[{\"id\":\"g-aaaa\",\"title\":\"A\","
-        "\"group\":\"favorite\"},{\"id\":\"g-aaaa\",\"title\":\"B\","
-        "\"group\":\"playing\"}]}",
+        "{\"version\":1,\"games\":[{\"id\":\"g-aaaa\",\"title\":\"A\"},"
+        "{\"id\":\"g-aaaa\",\"title\":\"B\"}]}",
         &games, error, sizeof(error)));
     CHECK(!pp_games_from_json(
-        "{\"version\":1,\"games\":[{\"id\":\"g-aaaa\",\"title\":\"A\","
-        "\"group\":\"other\"}]}",
+        "{\"version\":1,\"games\":[{\"id\":\"g-aaaa\"}]}",
         &games, error, sizeof(error)));
+    // Older backups still carry a group; it is ignored on import.
+    CHECK(pp_games_from_json(
+        "{\"version\":1,\"games\":[{\"id\":\"g-aaaa\",\"title\":\"A\","
+        "\"group\":\"playing\"}]}",
+        &games, error, sizeof(error)));
+    CHECK(games.count == 1);
     pp_games_free(&games);
 }
 
@@ -285,7 +287,7 @@ int main(void)
     test_profile_validation();
     test_profile_json_errors();
     test_profile_legacy_migration();
-    test_games_order_and_roundtrip();
+    test_games_roundtrip();
     test_games_validation();
     return pp_test_result("test_models");
 }

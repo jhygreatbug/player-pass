@@ -401,21 +401,9 @@ main {
 .image-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .image-status { margin-top: 6px; min-height: 16px; overflow-wrap: anywhere; }
 
-.games-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
+.games-list {
   margin-top: 14px;
 }
-
-.game-section-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-.game-section-title { font-weight: 700; }
-.game-section-head .muted { margin-left: auto; }
 
 .game-tiles {
   display: grid;

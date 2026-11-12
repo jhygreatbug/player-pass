@@ -1064,14 +1064,6 @@ function formatPlayedAt(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-// Steam's short description is HTML; the note field is plain text.
-function htmlToPlainText(html) {
-  if (!html) return '';
-  const template = document.createElement('template');
-  template.innerHTML = String(html);
-  return (template.content.textContent || '').replace(/\s+/g, ' ').trim();
-}
-
 function clipCodePoints(text, max) {
   return Array.from(text || '').slice(0, max).join('');
 }
@@ -1159,61 +1151,44 @@ async function loadGameCoversSequentially(jobs) {
 }
 
 function renderGames() {
-  const container = $('#games-groups');
+  const container = $('#games-list');
   if (!container) return;
   container.replaceChildren();
   const coverJobs = [];
   $('#games-empty').classList.toggle('hidden', state.games.length > 0);
-  const groups = [
-    { key: 'favorite', label: '喜欢的游戏' },
-    { key: 'playing', label: '正在玩的游戏' },
-  ];
-  groups.forEach(group => {
-    const entries = state.games
-      .map((game, index) => ({ game, index }))
-      .filter(entry => (entry.game.group || 'favorite') === group.key);
-    const section = el('section', 'game-section');
-    const head = el('div', 'game-section-head');
-    head.append(el('span', 'accent'));
-    head.append(el('span', 'game-section-title', group.label));
-    head.append(el('span', 'muted small', `${entries.length} 款`));
-    section.append(head);
+  const tiles = el('div', 'game-tiles');
+  state.games.forEach((game, index) => {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'game-tile';
+    tile.setAttribute('data-mutation', '');
+    if (game.__new) tile.classList.add('unsaved');
+    if (!state.canEdit) tile.disabled = true;
+    tile.addEventListener('click', () => openEditor(index));
 
-    const tiles = el('div', 'game-tiles');
-    entries.forEach(({ game, index }) => {
-      const tile = document.createElement('button');
-      tile.type = 'button';
-      tile.className = 'game-tile';
-      tile.setAttribute('data-mutation', '');
-      if (game.__new) tile.classList.add('unsaved');
-      if (!state.canEdit) tile.disabled = true;
-      tile.addEventListener('click', () => openEditor(index));
+    const cover = el('span', 'game-tile-cover');
+    const canvas = document.createElement('canvas');
+    canvas.width = SPECS.cover.width;
+    canvas.height = SPECS.cover.height;
+    cover.append(canvas, el('span', 'placeholder', '无封面'));
+    tile.append(cover, el('span', 'game-tile-title', game.title || '未命名游戏'));
+    tiles.append(tile);
 
-      const cover = el('span', 'game-tile-cover');
-      const canvas = document.createElement('canvas');
-      canvas.width = SPECS.cover.width;
-      canvas.height = SPECS.cover.height;
-      cover.append(canvas, el('span', 'placeholder', '无封面'));
-      tile.append(cover, el('span', 'game-tile-title', game.title || '未命名游戏'));
-      tiles.append(tile);
-
-      const pending = state.pending.get(`games/${game.id}`);
-      if (pending) {
-        try {
-          drawImageDataInto(canvas, decodePpim(pending.buffer));
-          markPreview(cover, true);
-        } catch (ignored) {
-          markPreview(cover, false);
-        }
-      } else if (game.cover) {
-        coverJobs.push({ id: game.id, canvas, container: cover });
-      } else {
+    const pending = state.pending.get(`games/${game.id}`);
+    if (pending) {
+      try {
+        drawImageDataInto(canvas, decodePpim(pending.buffer));
+        markPreview(cover, true);
+      } catch (ignored) {
         markPreview(cover, false);
       }
-    });
-    section.append(tiles);
-    container.append(section);
+    } else if (game.cover) {
+      coverJobs.push({ id: game.id, canvas, container: cover });
+    } else {
+      markPreview(cover, false);
+    }
   });
+  container.append(tiles);
   loadGameCoversSequentially(coverJobs);
 }
 
@@ -1235,11 +1210,7 @@ function openEditor(index) {
   state.editor.isNew = !!game.__new;
   $('#game-editor-title').textContent = state.editor.isNew ? '新增游戏' : '编辑游戏';
   $('#g-title').value = game.title || '';
-  $('#g-group').value = game.group || 'favorite';
-  $('#g-note').value = game.note || '';
-  $('#g-link').value = game.link || '';
   updateCounter($('#g-title'));
-  updateCounter($('#g-note'));
 
   const slot = `games/${game.id}`;
   const coverCanvas = $('#g-cover');
@@ -1279,11 +1250,9 @@ function updateEditorMoveButtons() {
     });
     return;
   }
-  const group = game.group || 'favorite';
-  const siblings = state.games.filter(item => (item.group || 'favorite') === group);
-  const position = siblings.indexOf(game);
+  const position = state.games.indexOf(game);
   if (up) up.disabled = !state.canEdit || position <= 0;
-  if (down) down.disabled = !state.canEdit || position < 0 || position >= siblings.length - 1;
+  if (down) down.disabled = !state.canEdit || position < 0 || position >= state.games.length - 1;
   if (del) del.disabled = !state.canEdit;
 }
 
@@ -1307,19 +1276,12 @@ function closeEditor(removeNew) {
 function editorValues() {
   return {
     title: $('#g-title').value.trim(),
-    group: $('#g-group').value,
-    note: $('#g-note').value.trim(),
-    link: $('#g-link').value.trim(),
   };
 }
 
 function validateEditorValues(values) {
   if (!values.title) return '游戏名称不能为空';
   if (codePoints(values.title) > 40) return '游戏名称不能超过 40 个字';
-  if (codePoints(values.note) > 120) return '游戏介绍不能超过 120 个字';
-  if (values.link && !/^https?:\/\/\S+$/i.test(values.link)) {
-    return '通用链接必须以 http:// 或 https:// 开头';
-  }
   return null;
 }
 
@@ -1333,9 +1295,6 @@ function commitEditorFields() {
   const error = validateEditorValues(values);
   if (error) return error;
   game.title = values.title;
-  game.group = values.group;
-  game.note = values.note;
-  game.link = values.link;
   delete game.__new;
   state.editor.index = -1;
   state.editor.isNew = false;
@@ -1370,19 +1329,14 @@ function validateGamesClient(games) {
 
 function moveEditorGame(delta) {
   if (!requireEdit()) return;
-  const game = state.games[state.editor.index];
-  if (!game) return;
-  const group = game.group || 'favorite';
-  const siblings = state.games.filter(item => (item.group || 'favorite') === group);
-  const position = siblings.indexOf(game);
+  const position = state.editor.index;
   const target = position + delta;
-  if (position < 0 || target < 0 || target >= siblings.length) return;
-  const other = siblings[target];
-  const first = state.games.indexOf(game);
-  const second = state.games.indexOf(other);
-  state.games[first] = other;
-  state.games[second] = game;
-  state.editor.index = second;
+  if (position < 0 || target < 0 || target >= state.games.length) return;
+  const game = state.games[position];
+  const other = state.games[target];
+  state.games[position] = other;
+  state.games[target] = game;
+  state.editor.index = target;
   setDirty('games', true);
   updateEditorMoveButtons();
   renderGames();
@@ -1511,7 +1465,7 @@ function selectPickerSource(source) {
 
 function startNewGame() {
   if (!requireEdit()) return;
-  const game = { id: newGameId(), title: '', group: 'favorite', note: '', link: '', cover: false, __new: true };
+  const game = { id: newGameId(), title: '', note: '', link: '', cover: false, __new: true };
   state.games.push(game);
   setDirty('games', true);
   renderGames();
@@ -1700,14 +1654,10 @@ async function selectSteamCandidate(candidate) {
   // The detail cover is Steam's 460 x 215 header art. Search results fall back
   // to the capsule only when the detail request failed.
   const coverUrl = (detail && detail.cover) || candidate.imageUrl || '';
-  const gameNote = detail && detail.description
-    ? clipCodePoints(htmlToPlainText(detail.description), 120)
-    : '';
   const game = {
     id: newGameId(),
     title,
-    group: candidate.source === 'recent' ? 'playing' : 'favorite',
-    note: gameNote,
+    note: '',
     link,
     cover: false,
     __new: true,
@@ -1977,7 +1927,6 @@ async function importBackup() {
         games: backup.games.games.map(game => ({
           id: game.id,
           title: game.title,
-          group: game.group,
           note: game.note || '',
           link: game.link || '',
         })),
@@ -2108,7 +2057,6 @@ async function saveAll() {
       games: state.games.map(game => ({
         id: game.id,
         title: game.title,
-        group: game.group,
         note: game.note || '',
         link: game.link || '',
       })),
@@ -2359,7 +2307,6 @@ function setupForms() {
   $('#game-editor-close').addEventListener('click', () => closeEditor(true));
   $('#game-editor-cancel').addEventListener('click', () => closeEditor(true));
   $('#g-title').addEventListener('input', () => updateCounter($('#g-title')));
-  $('#g-note').addEventListener('input', () => updateCounter($('#g-note')));
 
   const coverInput = $('#g-cover-file');
   coverInput.addEventListener('change', async () => {

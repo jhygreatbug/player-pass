@@ -34,25 +34,6 @@ bool pp_game_id_valid(const char *id)
     return true;
 }
 
-const char *pp_game_group_to_string(pp_game_group_t group)
-{
-    return group == PP_GAME_GROUP_PLAYING ? "playing" : "favorite";
-}
-
-bool pp_game_group_from_string(const char *text, pp_game_group_t *group)
-{
-    if (!text || !group) return false;
-    if (strcmp(text, "favorite") == 0) {
-        *group = PP_GAME_GROUP_FAVORITE;
-        return true;
-    }
-    if (strcmp(text, "playing") == 0) {
-        *group = PP_GAME_GROUP_PLAYING;
-        return true;
-    }
-    return false;
-}
-
 bool pp_games_add(pp_games_t *games, const pp_game_t *game)
 {
     if (!games || !game) return false;
@@ -102,22 +83,6 @@ bool pp_games_remove(pp_games_t *games, const char *id)
     return false;
 }
 
-void pp_games_normalize(pp_games_t *games)
-{
-    if (!games || games->count < 2) return;
-    size_t write = 0;
-    for (size_t i = 0; i < games->count; ++i) {
-        if (games->items[i].group != PP_GAME_GROUP_FAVORITE) continue;
-        if (i != write) {
-            const pp_game_t moving = games->items[i];
-            memmove(&games->items[write + 1], &games->items[write],
-                    (i - write) * sizeof(games->items[0]));
-            games->items[write] = moving;
-        }
-        ++write;
-    }
-}
-
 bool pp_games_validate(const pp_games_t *games, char *error, size_t error_size)
 {
     if (!games) {
@@ -156,12 +121,6 @@ bool pp_games_validate(const pp_games_t *games, char *error, size_t error_size)
         }
         if (!pp_optional_url_valid(game->link)) {
             pp_set_error(error, error_size, "games[%u].link is not a valid URL",
-                         (unsigned)i);
-            return false;
-        }
-        if (game->group != PP_GAME_GROUP_FAVORITE &&
-            game->group != PP_GAME_GROUP_PLAYING) {
-            pp_set_error(error, error_size, "games[%u].group is invalid",
                          (unsigned)i);
             return false;
         }
@@ -224,8 +183,6 @@ char *pp_games_to_json(const pp_games_t *games, bool include_covers)
         }
         cJSON_AddStringToObject(item, "id", game->id);
         cJSON_AddStringToObject(item, "title", game->title);
-        cJSON_AddStringToObject(item, "group",
-                                pp_game_group_to_string(game->group));
         cJSON_AddStringToObject(item, "note", game->note);
         cJSON_AddStringToObject(item, "link", game->link);
         if (include_covers) {
@@ -293,13 +250,6 @@ bool pp_games_from_json(const char *json, pp_games_t *games, char *error,
                         "link", error, error_size)) {
             goto done;
         }
-        const cJSON *group = cJSON_GetObjectItemCaseSensitive(item, "group");
-        if (!cJSON_IsString(group) ||
-            !pp_game_group_from_string(group->valuestring, &game.group)) {
-            pp_set_error(error, error_size,
-                         "group must be \"favorite\" or \"playing\"");
-            goto done;
-        }
         game.has_cover = false;
         if (!pp_games_add(&parsed, &game)) {
             pp_set_error(error, error_size,
@@ -309,7 +259,6 @@ bool pp_games_from_json(const char *json, pp_games_t *games, char *error,
     }
 
     if (!pp_games_validate(&parsed, error, error_size)) goto done;
-    pp_games_normalize(&parsed);
     pp_games_free(games);
     *games = parsed;
     ok = true;
